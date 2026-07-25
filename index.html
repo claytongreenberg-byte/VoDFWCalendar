@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PA Calendar</title>
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+  <style>
+    /* Minimal styling – clean and mobile-friendly */
+    :root {
+      --bg: #0f0f1a; --surface: #1a1a2e; --surface2: #16213e;
+      --text: #e0e0e0; --text2: #a0a0b0; --accent: #4fc3f7;
+      --danger: #ef5350; --success: #66bb6a; --warning: #ffa726;
+      --border: #2a2a4a; --radius: 12px; --shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 80px; }
+    header { background: var(--surface); padding: 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    header h1 span { color: var(--accent); }
+    .user-bar { display: flex; align-items: center; gap: 8px; }
+    .btn { padding: 6px 12px; border-radius: 8px; border: none; font-size: 0.8rem; font-weight: 600; cursor: pointer; background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-primary { background: var(--accent); color: #000; border-color: var(--accent); }
+    .btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+    .btn-success { background: var(--success); color: #000; border-color: var(--success); }
+    .btn-sm { padding: 4px 8px; font-size: 0.7rem; }
+    .container { max-width: 900px; margin: 0 auto; padding: 8px 12px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin-bottom: 8px; cursor: pointer; }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+    .card-title { font-weight: 700; font-size: 0.95rem; }
+    .card-meta { font-size: 0.75rem; color: var(--text2); }
+    .card-category { font-size: 0.7rem; color: var(--accent); text-transform: uppercase; }
+    .card-actions { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+    .status-badge { padding: 2px 6px; border-radius: 20px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
+    .status-pending { background: rgba(255,167,38,0.2); color: var(--warning); }
+    .status-confirmed { background: rgba(102,187,106,0.2); color: var(--success); }
+    .status-declined { background: rgba(239,83,80,0.2); color: var(--danger); }
+    .month-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; text-align: center; }
+    .month-day { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 2px; cursor: pointer; min-height: 50px; }
+    .month-day .day-num { font-weight: 700; font-size: 0.9rem; }
+    .month-day .dots { display: flex; gap: 2px; justify-content: center; flex-wrap: wrap; margin-top: 2px; }
+    .month-day .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .month-day.today { border-color: var(--accent); }
+    .month-day.selected { background: var(--accent); color: #000; }
+    .bottom-nav { position: fixed; bottom:0; left:0; right:0; background: var(--surface); border-top:1px solid var(--border); display:flex; padding:4px 0; justify-content:space-around; z-index:100; }
+    .nav-item { flex:1; text-align:center; padding:6px 0; font-size:0.7rem; font-weight:600; color:var(--text2); cursor:pointer; border:none; background:transparent; }
+    .nav-item.active { color:var(--accent); background:rgba(79,195,247,0.1); border-radius:8px; }
+    .badge { background: var(--danger); color:#fff; border-radius:10px; padding:1px 6px; font-size:0.6rem; margin-left:4px; }
+    .fab { position:fixed; bottom:80px; right:12px; width:52px; height:52px; border-radius:50%; background:var(--accent); color:#000; font-size:1.6rem; border:none; box-shadow:0 4px 20px rgba(79,195,247,0.4); cursor:pointer; z-index:99; }
+    .spinner { border:3px solid var(--border); border-top:3px solid var(--accent); border-radius:50%; width:24px; height:24px; animation:spin 0.8s linear infinite; margin:20px auto; }
+    @keyframes spin { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }
+    .val-item { padding:6px 8px; margin:3px 0; border-radius:6px; display:flex; align-items:center; gap:6px; font-size:0.8rem; }
+    .val-match { background:rgba(102,187,106,0.15); border:1px solid var(--success); }
+    .val-missing { background:rgba(255,167,38,0.15); border:1px solid var(--warning); }
+    .hide { display:none; }
+    @media (max-width:500px) { .month-day { min-height:40px; padding:2px; } .container { padding:4px; } }
+  </style>
+</head>
+<body>
+  <div class="safe-area-bg"></div>
+  <header>
+    <h1>📅 <span>PA</span> Calendar</h1>
+    <div class="user-bar" id="userBar">
+      <button class="btn" id="authBtn" onclick="handleAuth()">🔗 Connect</button>
+      <button class="btn" onclick="printCurrentView()">🖨️</button>
+    </div>
+  </header>
+  <div class="container" id="content"></div>
+  <button class="fab" onclick="switchTab('add')">+</button>
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="nav-item active" data-tab="month">📅 Month</button>
+    <button class="nav-item" data-tab="week">📆 Week</button>
+    <button class="nav-item" data-tab="upcoming">📋 Coming</button>
+    <button class="nav-item" data-tab="conflicts">⚠️ Conflicts <span class="badge" id="conflictBadge" style="display:none">0</span></button>
+    <button class="nav-item" data-tab="admin">⚙️ Admin</button>
+  </nav>
+
+  <div class="toast-container" id="toastContainer" style="position:fixed; bottom:100px; right:12px; z-index:9999; display:flex; flex-direction:column; gap:4px; max-width:280px;"></div>
+
+  <script>
+    // ═══════════════════════ CONFIG ═══════════════════════
+    const CONFIG = {
+      CLIENT_ID: '308642441787-lp1hkl8kbfkpr30ph8gl8c7e4tgd3p45.apps.googleusercontent.com',
+      API_KEY: 'AIzaSyCeedqFnpZl-uvMD9jiW_s7JUMnuCfwLxw',
+      GINGER_EMAIL: 'greenbergginger@gmail.com',
+      YOUR_EMAIL: 'cgreenberg@lmlawyers.com',
+      CONFLICT_BUFFER_HOURS: 2,
+      EVENT_DURATION_MINUTES: 60,
+      TIMEZONE: 'America/Chicago'
+    };
+
+    // ─── Helpers ───
+    function gid() { return 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2,6); }
+    function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+
+    // ─── State (only token and in‑memory events) ───
+    let state = {
+      accessToken: null,
+      user: null,
+      events: [],          // all events fetched from Google
+      activeTab: 'month',
+      selectedDay: null,
+      weekStart: null,
+      isLoading: false,
+      syncInProgress: false,
+      adminSettings: {
+        categories: ['Lake Highlands Girls Basketball','Parish Boys Basketball','Parish Girls Basketball',
+          'Parish Football','Shelton Football','Shelton Baseball','Parish Baseball','Parish Softball',
+          'Parish Soccer','Parish Boys Lacrosse','Parish Girls Lacrosse','Premier Events USA','Champion Sports','Other'],
+        paymentOptions: ['Paid on Spot','Paid Later','Volunteer (Free)'],
+        defaultPayment: 'Paid Later',
+        emojis: {
+          'Lake Highlands Girls Basketball':'🔴','Parish Boys Basketball':'🏀','Parish Girls Basketball':'🔵',
+          'Parish Football':'🏈','Shelton Football':'🏈','Shelton Baseball':'⚾','Parish Baseball':'⚾',
+          'Parish Softball':'🥎','Parish Soccer':'⚽','Parish Boys Lacrosse':'🥍','Parish Girls Lacrosse':'🥍',
+          'Premier Events USA':'🏆','Champion Sports':'🏆','Other':'📅'
+        }
+      },
+      showDeclined: true,
+      showResolvedConflicts: false
+    };
+
+    let tokenClient = null, gisReady = false;
+
+    // ─── Storage ───
+    function loadState() {
+      try {
+        const t = localStorage.getItem('paToken');
+        if (t) state.accessToken = t;
+        const s = localStorage.getItem('paAdmin');
+        if (s) state.adminSettings = JSON.parse(s);
+        const d = localStorage.getItem('paShowDeclined');
+        if (d !== null) state.showDeclined = d === 'true';
+      } catch(e){}
+    }
+    function saveAdmin() { localStorage.setItem('paAdmin', JSON.stringify(state.adminSettings)); }
+    function saveToken(t) { state.accessToken = t; localStorage.setItem('paToken', t); }
+    function clearToken() { state.accessToken = null; state.user = null; localStorage.removeItem('paToken'); }
+
+    // ─── Toast ───
+    function toast(msg, type='info') {
+      const c = document.getElementById('toastContainer');
+      const el = document.createElement('div');
+      el.style.cssText = `background:${type==='success'?'#66bb6a':type==='error'?'#ef5350':'#4fc3f7'};color:#000;padding:8px 12px;border-radius:8px;font-weight:600;font-size:0.8rem;animation:slideIn 0.3s ease;box-shadow:0 4px 12px rgba(0,0,0,0.3);`;
+      el.textContent = msg;
+      c.appendChild(el);
+      setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity 0.3s'; setTimeout(()=>el.remove(),300); }, 3000);
+    }
+
+    // ─── Google Auth ───
+    function handleAuth() {
+      if (state.accessToken && state.user) { clearToken(); renderAll(); toast('Signed out','info'); return; }
+      if (!gisReady || !tokenClient) { toast('Loading Google Auth...','info'); return; }
+      tokenClient.requestAccessToken();
+    }
+    async function handleTokenResponse(r) {
+      if (r.access_token) {
+        saveToken(r.access_token);
+        await fetchUserInfo();
+        toast('Connected!','success');
+        await fetchAllEvents();
+        renderAll();
+      }
+    }
+    async function fetchUserInfo() {
+      if (!state.accessToken) return;
+      try {
+        const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer '+state.accessToken } });
+        if (!r.ok) throw new Error('invalid');
+        state.user = await r.json();
+      } catch(e) { clearToken(); }
+      renderUserBar();
+    }
+    function renderUserBar() {
+      const bar = document.getElementById('userBar');
+      if (state.user) {
+        const initial = (state.user.name||state.user.email||'?')[0].toUpperCase();
+        bar.innerHTML = `<span style="background:#7c4dff;border-radius:50%;padding:4px 8px;font-weight:700;">${initial}</span>
+          <span style="font-size:0.8rem;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${state.user.email}</span>
+          <button class="btn btn-sm" onclick="clearToken();renderAll();">Out</button>`;
+      } else {
+        bar.innerHTML = `<button class="btn" onclick="handleAuth()">🔗 Connect</button>`;
+      }
+    }
+
+    // ─── API Calls ───
+    async function fetchWithAuth(url, options={}) {
+      options.headers = options.headers || {};
+      options.headers['Authorization'] = 'Bearer ' + state.accessToken;
+      const response = await fetch(url, options);
+      if (response.status === 401) { clearToken(); renderUserBar(); toast('Reconnect to Google','error'); throw new Error('Unauthorized'); }
+      return response;
+    }
+
+    async function fetchAllEvents() {
+      if (!state.accessToken) return;
+      if (state.syncInProgress) return;
+      state.syncInProgress = true;
+      document.getElementById('content').innerHTML = '<div class="spinner"></div>';
+      try {
+        const now = new Date();
+        const tMin = new Date(now.getFullYear()-2,0,1).toISOString();
+        const tMax = new Date(now.getFullYear()+3,11,31).toISOString();
+        let all = [], pt = null;
+        do {
+          let url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(tMin)}&timeMax=${encodeURIComponent(tMax)}&maxResults=2500&singleEvents=true`;
+          if (pt) url += '&pageToken='+pt;
+          const r = await fetchWithAuth(url);
+          const d = await r.json();
+          if (d.items) all = all.concat(d.items);
+          pt = d.nextPageToken;
+        } while (pt);
+        // Convert to our internal format
+        state.events = all.map(parseCalEventToLocal).filter(Boolean);
+        // Sort by date
+        state.events.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
+        saveAdmin();
+        toast(`Loaded ${state.events.length} events`,'success');
+      } catch(e) {
+        toast('Failed to load events: '+e.message,'error');
+        console.error(e);
+      }
+      state.syncInProgress = false;
+      // Re-render after fetch
+      renderAll();
+    }
+
+    function parseCalEventToLocal(cal) {
+      if (!cal || !cal.summary) return null;
+      const priv = cal.extendedProperties?.private || {};
+      const title = cal.summary;
+      const isAllDay = cal.start?.date && !cal.start?.dateTime;
+      const start = isAllDay ? cal.start.date : cal.start?.dateTime;
+      const end = cal.end ? (cal.end.date || cal.end.dateTime) : start;
+      if (!start) return null;
+      const dateObj = new Date(start);
+      const dateStr = dateObj.toISOString().split('T')[0];
+      const startTime = isAllDay ? '' : dateObj.toTimeString().slice(0,5);
+      let endDate = '';
+      if (end && end !== start) {
+        const eo = new Date(end);
+        eo.setDate(eo.getDate()-1);
+        endDate = eo.toISOString().split('T')[0];
+      }
+      const cleanTitle = title.replace(/^PA\s+/i,'').replace(/^🚫🎵 NO SPOTIFY - /,'').replace(/^⭐ /,'');
+      let category = priv.category || '';
+      if (!category) {
+        for (const cat of state.adminSettings.categories) {
+          if (new RegExp(`\\b${escapeRegExp(cat)}\\b`,'i').test(cleanTitle)) { category = cat; break; }
+        }
+        if (!category) category = 'Other';
+      }
+      let opponent = priv.opponent || '';
+      if (!opponent) {
+        opponent = cleanTitle.replace(new RegExp(`\\b${escapeRegExp(category)}\\b`,'i'),'').replace(/^[\s-]+|[\s-]+$/g,'').replace(/^vs\s+/i,'');
+      }
+      const noSpotify = priv.noSpotify === 'true' || title.includes('NO SPOTIFY');
+      return {
+        id: cal.id,
+        date: dateStr,
+        startTime: startTime,
+        endDate: endDate,
+        category: category,
+        opponent: opponent || cleanTitle,
+        location: priv.location || '',
+        notes: priv.notes || '',
+        noSpotify: noSpotify,
+        paymentStatus: priv.paymentStatus || 'Paid Later',
+        paymentAmount: priv.paymentAmount || '',
+        paymentPaid: priv.paymentPaid === 'true',
+        status: priv.appStatus || 'confirmed',
+        calendarEventId: cal.id,
+        _conflictResolved: priv._conflictResolved === 'true',
+        _declinedFrom: priv._declinedFrom || null,
+        hasConflict: false,
+        conflictWith: [],
+        summary: title
+      };
+    }
+
+    async function createEvent(d) {
+      if (!state.accessToken) { toast('Connect first','error'); return; }
+      const ev = {
+        summary: getTitle(d),
+        description: buildDescription(d),
+        start: d.startTime ? { dateTime: new Date(d.date+'T'+d.startTime+':00').toISOString(), timeZone: CONFIG.TIMEZONE } : { date: d.date },
+        end: d.startTime ? { dateTime: new Date(new Date(d.date+'T'+d.startTime+':00').getTime() + CONFIG.EVENT_DURATION_MINUTES*60000).toISOString(), timeZone: CONFIG.TIMEZONE } : { date: d.endDate || d.date },
+        attendees: [{ email: CONFIG.YOUR_EMAIL }, { email: CONFIG.GINGER_EMAIL }],
+        reminders: { useDefault: false, overrides: [{ method:'popup', minutes:60 },{ method:'popup', minutes:1440 }] },
+        extendedProperties: {
+          private: {
+            appStatus: 'confirmed',
+            paymentStatus: d.paymentStatus || 'Paid Later',
+            paymentAmount: d.paymentAmount || '',
+            paymentPaid: String(d.paymentPaid || false),
+            noSpotify: String(d.noSpotify || false),
+            opponent: d.opponent || '',
+            location: d.location || '',
+            notes: d.notes || '',
+            category: d.category || 'Other'
+          }
+        }
+      };
+      if (d.noSpotify) {
+        ev.reminders.overrides.push({ method:'popup', minutes:10 });
+        ev.description = (ev.description||'') + '\n🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️';
+      }
+      const r = await fetchWithAuth('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ev)
+      });
+      if (!r.ok) { const err = await r.json(); throw new Error(err.error?.message || 'Create failed'); }
+      const data = await r.json();
+      toast('Event created ✅','success');
+      await fetchAllEvents();
+    }
+
+    async function updateEvent(calId, updates) {
+      if (!state.accessToken) return;
+      const r = await fetchWithAuth(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${calId}?sendUpdates=none`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (!r.ok) { const err = await r.json(); throw new Error(err.error?.message || 'Update failed'); }
+      return await r.json();
+    }
+
+    async function deleteEventFromGoogle(calId) {
+      if (!state.accessToken) return;
+      const r = await fetchWithAuth(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${calId}?sendUpdates=none`, {
+        method: 'DELETE'
+      });
+      if (!r.ok) throw new Error('Delete failed');
+    }
+
+    // ─── Conflict Detection ───
+    function computeConflicts() {
+      const evs = state.events.filter(e => e.status !== 'declined');
+      for (const e of evs) { e.hasConflict = false; e.conflictWith = []; }
+      for (let i=0; i<evs.length; i++) {
+        for (let j=i+1; j<evs.length; j++) {
+          if (evs[i]._conflictResolved || evs[j]._conflictResolved) continue;
+          if (eventsOverlap(evs[i], evs[j])) {
+            evs[i].hasConflict = true; evs[i].conflictWith.push(evs[j].id);
+            evs[j].hasConflict = true; evs[j].conflictWith.push(evs[i].id);
+          }
+        }
+      }
+      updateConflictBadge();
+    }
+
+    function eventsOverlap(e1, e2) {
+      if (e1.id === e2.id) return false;
+      const s1 = e1.date, s2 = e2.date, e1e = e1.endDate || e1.date, e2e = e2.endDate || e2.date;
+      if (s1 > e2e || s2 > e1e) return false;
+      if (!e1.endDate && !e2.endDate && e1.startTime && e2.startTime) {
+        const toMin = t => { const [h,m] = t.split(':').map(Number); return h*60 + (m||0); };
+        const start1 = toMin(e1.startTime), start2 = toMin(e2.startTime);
+        const end1 = start1 + CONFIG.EVENT_DURATION_MINUTES, end2 = start2 + CONFIG.EVENT_DURATION_MINUTES;
+        const buf = CONFIG.CONFLICT_BUFFER_HOURS * 60;
+        return (start1 < end2 + buf) && (start2 < end1 + buf);
+      }
+      const t1 = e1.startTime || '00:00', t2 = e2.startTime || '00:00';
+      const d1 = new Date('2000-01-01T'+t1), d2 = new Date('2000-01-01T'+t2);
+      const b = CONFIG.CONFLICT_BUFFER_HOURS * 3600000;
+      const dur = CONFIG.EVENT_DURATION_MINUTES * 60000;
+      return (d1.getTime()-b) < (d2.getTime()+dur+b) && (d2.getTime()-b) < (d1.getTime()+dur+b);
+    }
+
+    function updateConflictBadge() {
+      const badge = document.getElementById('conflictBadge');
+      const active = state.events.filter(e => e.hasConflict && e.status !== 'declined' && !e._conflictResolved);
+      const count = active.length;
+      if (count > 0) { badge.textContent = count; badge.style.display = 'inline'; } else { badge.style.display = 'none'; }
+    }
+
+    // ─── Resolve Conflicts ───
+    async function resolveConflictKeepBoth(id1, id2) {
+      if (!state.accessToken) return;
+      // Mark both as resolved in extendedProperties
+      const patch = { extendedProperties: { private: { _conflictResolved: 'true' } } };
+      await updateEvent(id1, patch);
+      await updateEvent(id2, patch);
+      toast('✅ Both kept, conflict resolved','success');
+      await fetchAllEvents();
+    }
+
+    async function resolveConflictChooseOne(keepId, declineId) {
+      if (!state.accessToken) return;
+      // Mark keep as resolved, decline the other
+      await updateEvent(keepId, { extendedProperties: { private: { _conflictResolved: 'true', _declinedFrom: declineId } } });
+      await updateEvent(declineId, { extendedProperties: { private: { _conflictResolved: 'true', appStatus: 'declined' } } });
+      toast('✅ Kept one, declined the other','success');
+      await fetchAllEvents();
+    }
+
+    // ─── UI Helpers ───
+    function getTitle(e) {
+      let p = (state.adminSettings.emojis?.[e.category] || '⭐') + ' ';
+      let t = p + e.category;
+      if (e.opponent) t += ' vs ' + e.opponent;
+      if (e.location) t += ' @ ' + e.location;
+      return t;
+    }
+    function getDateRange(e) {
+      if (!e.endDate || e.endDate === e.date) return fmtDate(e.date);
+      return fmtDate(e.date) + ' – ' + fmtDate(e.endDate);
+    }
+    function fmtDate(d) { return new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',timeZone:CONFIG.TIMEZONE}).format(new Date(d+'T00:00:00')); }
+    function fmtTime(e) { if (!e.startTime) return ''; const [h,m]=e.startTime.split(':'); const hr=parseInt(h); return (hr>12?hr-12:(hr===0?12:hr))+':'+m+' '+(hr>=12?'PM':'AM'); }
+    function getStatusBadge(e) {
+      if (e.status === 'confirmed') return '<span class="status-badge status-confirmed">✅ Confirmed</span>';
+      if (e.status === 'declined') return '<span class="status-badge status-declined">❌ Declined</span>';
+      return '<span class="status-badge status-pending">⏳ Pending</span>';
+    }
+    function getPayClass(s) {
+      if (s === 'Paid on Spot') return 'pay-onspot';
+      if (s === 'Paid Later') return 'pay-later';
+      if (s === 'Paid ✅') return 'pay-paid';
+      return 'pay-volunteer';
+    }
+
+    // ─── Render Functions ───
+    function renderAll() {
+      renderUserBar();
+      updateNav();
+      computeConflicts();
+      const tabs = { month: renderMonth, week: renderWeek, upcoming: renderUpcoming, conflicts: renderConflicts, add: renderAdd, admin: renderAdmin };
+      (tabs[state.activeTab] || renderMonth)();
+    }
+
+    function switchTab(tab) {
+      state.activeTab = tab;
+      if (tab === 'month' && !state.selectedDay) state.selectedDay = new Date();
+      renderAll();
+    }
+
+    function updateNav() {
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      const map = { month:0, week:1, upcoming:2, conflicts:3, admin:4 };
+      const idx = map[state.activeTab] || 0;
+      document.querySelectorAll('.nav-item')[idx].classList.add('active');
+    }
+
+    // ─── Month View ───
+    function renderMonth() {
+      if (!state.selectedDay) state.selectedDay = new Date();
+      const c = document.getElementById('content');
+      const y = state.selectedDay.getFullYear(), m = state.selectedDay.getMonth();
+      const fd = new Date(y,m,1), ld = new Date(y,m+1,0);
+      const pad = fd.getDay();
+      let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="shiftMonth(-1)">◀</button>
+        <h2 style="font-size:1rem;">${fd.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</h2>
+        <button class="btn btn-sm" onclick="shiftMonth(1)">▶</button>
+      </div>`;
+      html += '<div class="month-grid">';
+      ['S','M','T','W','T','F','S'].forEach(d => html += `<div style="font-size:0.65rem;font-weight:700;color:var(--text2);padding:4px;">${d}</div>`);
+      for (let i=0;i<pad;i++) html += '<div></div>';
+      const today = new Date().toISOString().split('T')[0];
+      for (let d=1; d<=ld.getDate(); d++) {
+        const date = new Date(y,m,d);
+        const ds = date.toISOString().split('T')[0];
+        const isToday = ds === today;
+        const isSelected = state.selectedDay && ds === state.selectedDay.toISOString().split('T')[0];
+        const dayEvents = state.events.filter(e => e.date <= ds && (e.endDate||e.date) >= ds && (state.showDeclined ? true : e.status !== 'declined'));
+        const hasConflict = dayEvents.some(e => e.hasConflict && !e._conflictResolved);
+        let cls = 'month-day';
+        if (isToday) cls += ' today';
+        if (isSelected) cls += ' selected';
+        html += `<div class="${cls}" onclick="selectMonthDay('${ds}')">
+          <div class="day-num">${d}</div>
+          ${dayEvents.length ? `<div class="dots">${dayEvents.slice(0,4).map(e => `<div class="dot" style="background:${e.status==='confirmed'?'var(--success)':e.status==='declined'?'var(--danger)':'var(--warning)'};"></div>`).join('')}${dayEvents.length>4 ? `<span style="font-size:0.5rem;color:var(--text2);">+${dayEvents.length-4}</span>` : ''}</div>` : ''}
+        </div>`;
+      }
+      html += '</div>';
+      // Show events for selected day
+      if (state.selectedDay) {
+        const sds = state.selectedDay.toISOString().split('T')[0];
+        const evs = state.events.filter(e => e.date <= sds && (e.endDate||e.date) >= sds && (state.showDeclined ? true : e.status !== 'declined'));
+        evs.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
+        if (evs.length) {
+          html += `<h3 style="margin:12px 0 4px;color:var(--accent);">${fmtDate(sds)}</h3>`;
+          html += evs.map(e => renderCard(e)).join('');
+        } else {
+          html += `<div class="empty-state" style="text-align:center;padding:20px;color:var(--text2);">No events</div>`;
+        }
+      }
+      c.innerHTML = html;
+    }
+    function selectMonthDay(ds) {
+      state.selectedDay = new Date(ds+'T00:00:00');
+      renderMonth();
+    }
+    function shiftMonth(dir) {
+      const d = state.selectedDay || new Date();
+      state.selectedDay = new Date(d.getFullYear(), d.getMonth()+dir, 1);
+      renderMonth();
+    }
+
+    // ─── Week View ───
+    function renderWeek() {
+      // simplified: just show a list of events for the next 7 days from today
+      const c = document.getElementById('content');
+      const today = new Date().toISOString().split('T')[0];
+      const end = new Date();
+      end.setDate(end.getDate()+7);
+      const endStr = end.toISOString().split('T')[0];
+      const evs = state.events.filter(e => e.date >= today && e.date <= endStr && (state.showDeclined ? true : e.status !== 'declined'));
+      evs.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
+      let html = `<h2 style="margin:8px 0;">📆 Next 7 Days</h2>`;
+      if (!evs.length) html += '<div class="empty-state">No events</div>';
+      else {
+        let lastDate = '';
+        evs.forEach(e => {
+          if (e.date !== lastDate) {
+            if (lastDate) html += '</div>';
+            lastDate = e.date;
+            html += `<h4 style="margin:10px 0 4px;color:var(--text2);">${fmtDate(e.date)}</h4><div>`;
+          }
+          html += renderCard(e);
+        });
+        html += '</div>';
+      }
+      c.innerHTML = html;
+    }
+
+    // ─── Upcoming View ───
+    function renderUpcoming() {
+      const c = document.getElementById('content');
+      const today = new Date().toISOString().split('T')[0];
+      const evs = state.events.filter(e => e.date >= today && (state.showDeclined ? true : e.status !== 'declined'));
+      evs.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
+      const max = 20;
+      const showAll = state.showAllUpcoming;
+      const display = showAll ? evs : evs.slice(0, max);
+      let html = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="fetchAllEvents()">🔄 Refresh</button>
+        <button class="btn btn-sm" onclick="state.showAllUpcoming=!state.showAllUpcoming;renderAll();">${showAll ? '▲ Less' : '▼ More'}</button>
+      </div>`;
+      if (!display.length) html += '<div class="empty-state">No upcoming events</div>';
+      else {
+        let lastDate = '';
+        display.forEach(e => {
+          if (e.date !== lastDate) {
+            if (lastDate) html += '</div>';
+            lastDate = e.date;
+            html += `<h4 style="margin:10px 0 4px;color:var(--text2);">${fmtDate(e.date)}</h4><div>`;
+          }
+          html += renderCard(e);
+        });
+        html += '</div>';
+        if (evs.length > max && !showAll) html += `<div style="text-align:center;margin:8px;"><button class="btn" onclick="state.showAllUpcoming=true;renderAll();">Show all ${evs.length} events</button></div>`;
+      }
+      c.innerHTML = html;
+    }
+
+    // ─── Conflicts View ───
+    function renderConflicts() {
+      const c = document.getElementById('content');
+      const conflicts = [];
+      const seen = new Set();
+      for (const e of state.events) {
+        if (e.status === 'declined' || e._conflictResolved) continue;
+        for (const otherId of e.conflictWith) {
+          const pairId = [e.id, otherId].sort().join('-');
+          if (seen.has(pairId)) continue;
+          seen.add(pairId);
+          const other = state.events.find(ev => ev.id === otherId);
+          if (!other || other._conflictResolved) continue;
+          conflicts.push([e, other]);
+        }
+      }
+      let html = `<h2>⚠️ Conflicts (${conflicts.length})</h2>`;
+      if (!conflicts.length) html += '<div class="empty-state">No active conflicts 🎉</div>';
+      else {
+        conflicts.forEach(([e1,e2]) => {
+          html += `<div style="border:2px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:10px;background:rgba(239,83,80,0.05);">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:180px;">${renderCard(e1, true)}</div>
+              <div style="flex:1;min-width:180px;">${renderCard(e2, true)}</div>
+            </div>
+            <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">
+              <button class="btn btn-success btn-sm" onclick="resolveConflictKeepBoth('${e1.id}','${e2.id}')">✅ Keep Both</button>
+              <button class="btn btn-primary btn-sm" onclick="resolveConflictChooseOne('${e1.id}','${e2.id}')">➡️ Keep "${getTitle(e1)}"</button>
+              <button class="btn btn-primary btn-sm" onclick="resolveConflictChooseOne('${e2.id}','${e1.id}')">➡️ Keep "${getTitle(e2)}"</button>
+            </div>
+          </div>`;
+        });
+      }
+      c.innerHTML = html;
+    }
+
+    // ─── Card Render ───
+    function renderCard(e, showConflict=false) {
+      const sb = getStatusBadge(e);
+      const sp = e.noSpotify ? '🚫🎵' : '🎵';
+      let payHtml = '';
+      if (e.paymentAmount) {
+        payHtml = `<span class="status-badge" style="background:rgba(255,167,38,0.2);color:var(--warning);">$${e.paymentAmount} ${e.paymentStatus}</span>`;
+      }
+      let conflictHtml = '';
+      if (showConflict || e.hasConflict) {
+        conflictHtml = `<span class="status-badge" style="background:rgba(239,83,80,0.2);color:var(--danger);">⚠️ Conflict</span>`;
+      }
+      return `<div class="card" style="border-left:3px solid ${e.status==='confirmed'?'var(--success)':e.status==='declined'?'var(--danger)':'var(--warning)'};">
+        <div class="card-header">
+          <div>
+            <div class="card-category">${e.category} ${sp}</div>
+            <div class="card-title">${getTitle(e)}</div>
+            <div class="card-meta">${e.startTime ? fmtTime(e) : 'All Day'} ${e.location ? '📍 '+e.location : ''}<br>${getDateRange(e)}</div>
+            ${payHtml}
+            ${e.notes ? `<div style="font-size:0.7rem;color:var(--text2);margin-top:2px;">📝 ${e.notes}</div>` : ''}
+          </div>
+          <div>${sb} ${conflictHtml}</div>
+        </div>
+        <div class="card-actions">
+          ${e.status==='pending' ? `<button class="btn btn-sm btn-success" onclick="event.stopPropagation();toggleStatus('${e.id}','confirmed')">✅ Confirm</button>` : ''}
+          ${e.status==='confirmed' ? `<button class="btn btn-sm" onclick="event.stopPropagation();toggleStatus('${e.id}','pending')">↩️ Undo</button>` : ''}
+          ${e.status!=='declined' ? `<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();toggleStatus('${e.id}','declined')">❌ Decline</button>` : `<button class="btn btn-sm" onclick="event.stopPropagation();toggleStatus('${e.id}','pending')">↩️ Restore</button>`}
+          <button class="btn btn-sm" onclick="event.stopPropagation();editEvent('${e.id}')">✏️</button>
+          <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();if(confirm('Delete?'))deleteEvent('${e.id}')">🗑️</button>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.7rem;cursor:pointer;">
+            <input type="checkbox" ${e.noSpotify?'checked':''} onchange="event.stopPropagation();toggleSpotify('${e.id}')"> Block Spotify
+          </label>
+        </div>
+      </div>`;
+    }
+
+    // ─── Event Actions ───
+    async function toggleStatus(id, newStatus) {
+      const ev = state.events.find(e => e.id === id);
+      if (!ev) return;
+      ev.status = newStatus;
+      if (newStatus === 'declined') {
+        // Remove from Google? We'll just mark it as declined in extendedProperties
+        await updateEvent(id, { extendedProperties: { private: { appStatus: 'declined' } } });
+      } else {
+        await updateEvent(id, { extendedProperties: { private: { appStatus: newStatus } } });
+      }
+      await fetchAllEvents();
+    }
+
+    async function toggleSpotify(id) {
+      const ev = state.events.find(e => e.id === id);
+      if (!ev) return;
+      const newVal = !ev.noSpotify;
+      ev.noSpotify = newVal;
+      // Update the event in Google
+      const summary = getTitle(ev);
+      const description = buildDescription(ev);
+      await updateEvent(id, {
+        summary: summary,
+        description: description,
+        extendedProperties: { private: { noSpotify: String(newVal) } }
+      });
+      await fetchAllEvents();
+      toast(newVal ? '🚫 Spotify blocked' : '🎵 Spotify allowed','info');
+    }
+
+    function buildDescription(ev) {
+      let desc = '';
+      if (ev.noSpotify) desc += '🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n';
+      if (ev.paymentAmount) desc += '💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n';
+      if (ev.notes) desc += '📝 '+ev.notes+'\n';
+      return desc;
+    }
+
+    async function deleteEvent(id) {
+      const ev = state.events.find(e => e.id === id);
+      if (!ev) return;
+      if (ev.calendarEventId) await deleteEventFromGoogle(ev.calendarEventId);
+      await fetchAllEvents();
+    }
+
+    // ─── Add / Edit ───
+    function renderAdd() {
+      const c = document.getElementById('content');
+      c.innerHTML = `<div class="card">
+        <h2>➕ Add Event</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;">
+          <input type="date" id="addDate" value="${new Date().toISOString().split('T')[0]}">
+          <input type="date" id="addEndDate">
+          <input type="time" id="addTime">
+          <select id="addCategory"><option value="">Category</option>${state.adminSettings.categories.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+        </div>
+        <input type="text" id="addOpponent" placeholder="Opponent" style="width:100%;padding:8px;margin:4px 0;">
+        <input type="text" id="addLocation" placeholder="Location" style="width:100%;padding:8px;margin:4px 0;">
+        <textarea id="addNotes" placeholder="Notes" style="width:100%;padding:8px;margin:4px 0;min-height:60px;"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
+          <label><input type="checkbox" id="addSpotify"> Block Spotify</label>
+        </div>
+        <div style="display:flex;gap:8px;margin:8px 0;">
+          <select id="addPayment"><option value="Paid on Spot">Paid on Spot</option><option value="Paid Later" selected>Paid Later</option><option value="Volunteer (Free)">Volunteer</option></select>
+          <input type="number" id="addAmount" placeholder="Amount $" step="0.01" style="width:100px;">
+        </div>
+        <button class="btn btn-primary" onclick="submitAdd()">➕ Add Event</button>
+        <button class="btn" onclick="switchTab('month')">Cancel</button>
+      </div>`;
+    }
+
+    async function submitAdd() {
+      const date = document.getElementById('addDate').value;
+      const endDate = document.getElementById('addEndDate').value;
+      const time = document.getElementById('addTime').value;
+      const category = document.getElementById('addCategory').value || 'Other';
+      const opponent = document.getElementById('addOpponent').value.trim();
+      const location = document.getElementById('addLocation').value.trim();
+      const notes = document.getElementById('addNotes').value.trim();
+      const noSpotify = document.getElementById('addSpotify').checked;
+      const paymentStatus = document.getElementById('addPayment').value;
+      const paymentAmount = document.getElementById('addAmount').value.trim();
+      if (!date) { toast('Date required','error'); return; }
+      try {
+        await createEvent({ date, endDate, startTime: time, category, opponent, location, notes, noSpotify, paymentStatus, paymentAmount });
+        switchTab('month');
+      } catch(e) { toast('Error: '+e.message,'error'); }
+    }
+
+    function editEvent(id) {
+      const ev = state.events.find(e => e.id === id);
+      if (!ev) return;
+      const c = document.getElementById('content');
+      c.innerHTML = `<div class="card">
+        <h2>✏️ Edit Event</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;">
+          <input type="date" id="editDate" value="${ev.date}">
+          <input type="date" id="editEndDate" value="${ev.endDate||''}">
+          <input type="time" id="editTime" value="${ev.startTime||''}">
+          <select id="editCategory">${state.adminSettings.categories.map(c => `<option value="${c}" ${c===ev.category?'selected':''}>${c}</option>`).join('')}</select>
+        </div>
+        <input type="text" id="editOpponent" value="${ev.opponent||''}" placeholder="Opponent" style="width:100%;padding:8px;margin:4px 0;">
+        <input type="text" id="editLocation" value="${ev.location||''}" placeholder="Location" style="width:100%;padding:8px;margin:4px 0;">
+        <textarea id="editNotes" placeholder="Notes" style="width:100%;padding:8px;margin:4px 0;min-height:60px;">${ev.notes||''}</textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
+          <label><input type="checkbox" id="editSpotify" ${ev.noSpotify?'checked':''}> Block Spotify</label>
+        </div>
+        <div style="display:flex;gap:8px;margin:8px 0;">
+          <select id="editPayment"><option value="Paid on Spot" ${ev.paymentStatus==='Paid on Spot'?'selected':''}>Paid on Spot</option><option value="Paid Later" ${ev.paymentStatus==='Paid Later'?'selected':''}>Paid Later</option><option value="Volunteer (Free)" ${ev.paymentStatus==='Volunteer (Free)'?'selected':''}>Volunteer</option></select>
+          <input type="number" id="editAmount" value="${ev.paymentAmount||''}" placeholder="Amount $" step="0.01" style="width:100px;">
+        </div>
+        <button class="btn btn-primary" onclick="submitEdit('${ev.id}')">💾 Save</button>
+        <button class="btn" onclick="switchTab('month')">Cancel</button>
+      </div>`;
+    }
+
+    async function submitEdit(id) {
+      const ev = state.events.find(e => e.id === id);
+      if (!ev) return;
+      const date = document.getElementById('editDate').value;
+      const endDate = document.getElementById('editEndDate').value;
+      const time = document.getElementById('editTime').value;
+      const category = document.getElementById('editCategory').value || 'Other';
+      const opponent = document.getElementById('editOpponent').value.trim();
+      const location = document.getElementById('editLocation').value.trim();
+      const notes = document.getElementById('editNotes').value.trim();
+      const noSpotify = document.getElementById('editSpotify').checked;
+      const paymentStatus = document.getElementById('editPayment').value;
+      const paymentAmount = document.getElementById('editAmount').value.trim();
+      try {
+        // Build update
+        const updates = {
+          summary: getTitle({ category, opponent, location, noSpotify }),
+          description: buildDescription({ noSpotify, paymentAmount, paymentStatus, notes }),
+          start: time ? { dateTime: new Date(date+'T'+time+':00').toISOString(), timeZone: CONFIG.TIMEZONE } : { date: date },
+          end: time ? { dateTime: new Date(new Date(date+'T'+time+':00').getTime() + CONFIG.EVENT_DURATION_MINUTES*60000).toISOString(), timeZone: CONFIG.TIMEZONE } : { date: endDate || date },
+          extendedProperties: {
+            private: {
+              appStatus: ev.status,
+              paymentStatus, paymentAmount, noSpotify: String(noSpotify),
+              opponent, location, notes, category
+            }
+          }
+        };
+        await updateEvent(ev.calendarEventId, updates);
+        toast('Updated ✅','success');
+        await fetchAllEvents();
+        switchTab('month');
+      } catch(e) { toast('Error: '+e.message,'error'); }
+    }
+
+    // ─── Admin ───
+    function renderAdmin() {
+      const c = document.getElementById('content');
+      const total = state.events.length;
+      const active = state.events.filter(e => e.status !== 'declined' && (e.endDate||e.date) >= new Date().toISOString().split('T')[0]).length;
+      let html = `<h2>⚙️ Admin</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin:8px 0;">
+          <div class="card" style="text-align:center;"><div style="font-size:1.5rem;">${total}</div><div style="font-size:0.7rem;color:var(--text2);">Total</div></div>
+          <div class="card" style="text-align:center;"><div style="font-size:1.5rem;">${active}</div><div style="font-size:0.7rem;color:var(--text2);">Active</div></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="fetchAllEvents()">🔄 Sync</button>
+          <button class="btn btn-danger" onclick="if(confirm('Delete ALL events from Google Calendar?'))deleteAllGoogleEvents()">🔥 Delete All</button>
+          <button class="btn" onclick="showQuickAddUI()">📥 Quick Add</button>
+          <button class="btn" onclick="exportData()">📥 Backup</button>
+          <button class="btn" onclick="importBackup()">📤 Restore</button>
+        </div>
+        <div style="margin:12px 0;">
+          <label><input type="checkbox" ${state.showDeclined?'checked':''} onchange="state.showDeclined=!state.showDeclined;renderAll();"> Show declined events</label>
+        </div>
+      `;
+      c.innerHTML = html;
+    }
+
+    // ─── Quick Add ───
+    function showQuickAddUI() {
+      const c = document.getElementById('content');
+      c.innerHTML = `<div class="card">
+        <h2>📥 Quick Add</h2>
+        <p style="font-size:0.8rem;color:var(--text2);">Paste your schedule text (4 lines per event: date, opponent, location, time)</p>
+        <textarea id="quickInput" rows="12" style="width:100%;padding:8px;margin:8px 0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);"></textarea>
+        <button class="btn btn-primary" onclick="runQuickAdd()">Preview & Add</button>
+        <button class="btn" onclick="switchTab('admin')">Cancel</button>
+        <div id="quickResults" style="margin-top:12px;"></div>
+      </div>`;
+    }
+
+    async function runQuickAdd() {
+      const text = document.getElementById('quickInput').value.trim();
+      if (!text) { toast('Paste text first','error'); return; }
+      const events = parseFreeText(text);
+      if (!events.length) { toast('No events parsed','error'); return; }
+      let html = `<p>Found ${events.length} events:</p>`;
+      let added = 0;
+      for (const ev of events) {
+        const exists = state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent);
+        html += `<div class="val-item ${exists?'val-match':'val-missing'}">
+          <span>${exists?'✅':'➕'}</span> ${ev.date} — ${ev.opponent} (${ev.category})
+          ${exists ? '<span style="color:var(--success);font-size:0.7rem;">Exists</span>' : `<button class="btn btn-sm btn-success" onclick="addSingleEvent(${JSON.stringify(ev).replace(/"/g,'&quot;')}); this.disabled=true;">Add</button>`}
+        </div>`;
+      }
+      html += `<button class="btn btn-primary btn-sm" onclick="addAllNewEvents(${JSON.stringify(events).replace(/"/g,'&quot;')});">Add All New</button>`;
+      document.getElementById('quickResults').innerHTML = html;
+    }
+
+    async function addSingleEvent(ev) {
+      try {
+        await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
+        toast('Added '+ev.opponent,'success');
+      } catch(e) { toast('Error: '+e.message,'error'); }
+    }
+
+    async function addAllNewEvents(events) {
+      for (const ev of events) {
+        if (!state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent)) {
+          try {
+            await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
+          } catch(e) { console.warn(e); }
+        }
+      }
+      toast('All new events added','success');
+      await fetchAllEvents();
+      renderAll();
+    }
+
+    // ─── Parser ───
+    function parseFreeText(text) {
+      const lines = text.split(/\n/).map(l => l.trim());
+      const events = [];
+      let currentCategory = 'Other';
+      function isCategoryLine(line) {
+        for (const cat of state.adminSettings.categories) {
+          if (line.toLowerCase() === cat.toLowerCase() || line.toLowerCase().includes(cat.toLowerCase())) return cat;
+        }
+        return null;
+      }
+      function isTimeLine(line) {
+        if (!line) return false;
+        const upper = line.toUpperCase();
+        if (upper === 'TBD' || upper === 'TBA') return true;
+        return /^(\d{1,2})(?::(\d{2}))?\s*(?:AM|PM)?$/i.test(line);
+      }
+      let i=0;
+      while (i<lines.length) {
+        const line = lines[i];
+        if (!line) { i++; continue; }
+        const cat = isCategoryLine(line);
+        if (cat) { currentCategory = cat; i++; continue; }
+        const range = line.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+        const single = line.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+        if (range || single) {
+          let dateStr='', endDateStr='';
+          if (range) {
+            let m1=parseInt(range[1]), d1=parseInt(range[2]), y1=parseInt(range[3]);
+            let m2=parseInt(range[4]), d2=parseInt(range[5]), y2=parseInt(range[6]);
+            if (y1<100) y1+=2000; if (y2<100) y2+=2000;
+            dateStr = `${y1}-${String(m1).padStart(2,'0')}-${String(d1).padStart(2,'0')}`;
+            endDateStr = `${y2}-${String(m2).padStart(2,'0')}-${String(d2).padStart(2,'0')}`;
+          } else {
+            let m=parseInt(single[1]), d=parseInt(single[2]);
+            let y=single[3]?parseInt(single[3]):null;
+            if (y && y<100) y+=2000;
+            if (!y) { const now=new Date(); y=now.getFullYear(); if (m<now.getMonth()+1 || (m===now.getMonth()+1 && d<now.getDate())) y+=1; }
+            dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+          }
+          let opponent = (i+1<lines.length) ? lines[i+1] : '';
+          if (/\d{1,2}\/\d{1,2}/.test(opponent) || isCategoryLine(opponent)) opponent = '';
+          let notes = '';
+          if (opponent.includes('*')) {
+            const dash = opponent.match(/^(.*?)\s*[-–]\s*(.*)$/);
+            if (dash) { opponent = dash[1].trim(); notes = dash[2].trim(); }
+          }
+          let location = 'Home';
+          let startTime = '';
+          let nextLine = (i+2<lines.length) ? lines[i+2] : '';
+          let timeLine = (i+3<lines.length) ? lines[i+3] : '';
+          if (isTimeLine(nextLine)) {
+            startTime = nextLine;
+          } else if (nextLine && !isCategoryLine(nextLine) && !/\d{1,2}\/\d{1,2}/.test(nextLine)) {
+            location = nextLine;
+            if (timeLine && isTimeLine(timeLine)) startTime = timeLine;
+          }
+          if (startTime && (startTime.toUpperCase()==='TBD' || startTime.toUpperCase()==='TBA')) startTime = '';
+          if (opponent && !/^\d/.test(opponent)) {
+            events.push({ date:dateStr, endDate:endDateStr, startTime, category:currentCategory, opponent, location, noSpotify:false, paymentStatus:'', paymentAmount:'', notes });
+          }
+          i += 4;
+        } else { i++; }
+      }
+      return events;
+    }
+
+    // ─── Backup / Restore ───
+    function exportData() {
+      const data = { events: state.events, adminSettings: state.adminSettings };
+      const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'pa-backup-'+new Date().toISOString().split('T')[0]+'.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Backup downloaded','success');
+    }
+    function importBackup() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (data.events && data.adminSettings) {
+              state.adminSettings = data.adminSettings;
+              saveAdmin();
+              // We would need to re-create events in Google – but for now just show a notice
+              toast('Backup loaded. You need to re-import events manually.','info');
+            } else {
+              toast('Invalid backup file','error');
+            }
+          } catch(err) { toast('Error parsing file','error'); }
+        };
+        reader.readAsText(file);
+      };
+      input.click();
+    }
+
+    // ─── Delete all Google events ───
+    async function deleteAllGoogleEvents() {
+      if (!state.accessToken) { toast('Connect first','error'); return; }
+      const evs = state.events.filter(e => e.calendarEventId);
+      if (!evs.length) { toast('No events to delete','info'); return; }
+      for (const ev of evs) {
+        try {
+          await deleteEventFromGoogle(ev.calendarEventId);
+        } catch(e) { console.warn(e); }
+      }
+      toast('Deleted '+evs.length+' events','success');
+      await fetchAllEvents();
+    }
+
+    // ─── Init ───
+    function init() {
+      loadState();
+      if (state.accessToken) {
+        fetchUserInfo().then(() => fetchAllEvents());
+      } else {
+        renderAll();
+      }
+      loadGis();
+      // Set selectedDay to today if not set
+      if (!state.selectedDay) state.selectedDay = new Date();
+      // Set weekStart
+      const now = new Date();
+      state.weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+      // Bottom nav click
+      document.querySelectorAll('.nav-item').forEach(el => {
+        el.addEventListener('click', () => switchTab(el.dataset.tab));
+      });
+    }
+
+    function loadGis() {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client';
+      s.onload = () => {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: CONFIG.CLIENT_ID,
+          scope: 'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email',
+          callback: r => {
+            if (r.error) { toast('Auth error: '+r.error,'error'); return; }
+            handleTokenResponse(r);
+          }
+        });
+        gisReady = true;
+      };
+      document.head.appendChild(s);
+    }
+
+    // ─── Print ───
+    function printCurrentView() {
+      window.print();
+    }
+
+    // ─── Start ───
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
