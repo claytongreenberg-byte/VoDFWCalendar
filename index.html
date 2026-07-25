@@ -97,7 +97,7 @@
       accessToken: null,
       user: null,
       events: [],
-      filterPAOnly: false,  // toggle for PA filter
+      filterPAOnly: false,
       activeTab: 'month',
       selectedDay: null,
       weekStart: null,
@@ -195,7 +195,7 @@
       return response;
     }
 
-    // ─── Fetch All Events (with optional PA filter) ───
+    // ─── Fetch All Events ───
     async function fetchAllEvents() {
       if (!state.accessToken) return;
       if (state.syncInProgress) return;
@@ -214,9 +214,7 @@
           if (d.items) all = all.concat(d.items);
           pt = d.nextPageToken;
         } while (pt);
-        // Parse all events
         let parsed = all.map(parseCalEventToLocal).filter(Boolean);
-        // Apply PA filter if enabled
         if (state.filterPAOnly) {
           parsed = parsed.filter(e => isPAEvent(e));
         }
@@ -231,11 +229,9 @@
       renderAll();
     }
 
-    // ─── PA Filter ───
     function isPAEvent(ev) {
       if (!ev) return false;
       const sum = ev.summary || ev.opponent || '';
-      // Check categories
       for (const cat of state.adminSettings.categories) {
         if (sum.includes(cat)) return true;
       }
@@ -499,7 +495,6 @@
         </div>`;
       }
       html += '</div>';
-      // Show events for selected day
       if (state.selectedDay) {
         const sds = state.selectedDay.toISOString().split('T')[0];
         const evs = state.events.filter(e => e.date <= sds && (e.endDate||e.date) >= sds && (state.showDeclined ? true : e.status !== 'declined'));
@@ -863,90 +858,144 @@
       } catch(e) { toast('Error: '+e.message,'error'); }
     }
 
+    // ─── Rate-safe import ───
     async function addAllNewEvents(events) {
-  let added = 0;
-  for (const ev of events) {
-    if (!state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent)) {
-      try {
-        await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
-        added++;
-        // Show progress
-        document.getElementById('quickResults').innerHTML = `<p>Added ${added}/${events.length} events...</p>`;
-        // Wait 1 second between each event (to avoid rate limits)
-        await new Promise(r => setTimeout(r, 1000));
-      } catch(e) {
-        console.warn('Failed to add:', ev.opponent, e);
+      let added = 0;
+      for (const ev of events) {
+        if (!state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent)) {
+          try {
+            await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
+            added++;
+            document.getElementById('quickResults').innerHTML = `<p>Added ${added}/${events.length} events...</p>`;
+            await new Promise(r => setTimeout(r, 1000));
+          } catch(e) {
+            console.warn('Failed to add:', ev.opponent, e);
+          }
+        }
       }
+      toast(`✅ Added ${added} new events`, 'success');
+      await fetchAllEvents();
+      renderAll();
     }
-  }
-  toast(`✅ Added ${added} new events`, 'success');
-  await fetchAllEvents();
-  renderAll();
-}
 
-    // ─── Parser ───
+    // ─── Improved Parser ───
     function parseFreeText(text) {
-      const lines = text.split(/\n/).map(l => l.trim());
+      const lines = text.split(/\n/).map(l => l.trim()).filter(l => l);
       const events = [];
       let currentCategory = 'Other';
+      let i = 0;
+
       function isCategoryLine(line) {
         for (const cat of state.adminSettings.categories) {
           if (line.toLowerCase() === cat.toLowerCase() || line.toLowerCase().includes(cat.toLowerCase())) return cat;
         }
         return null;
       }
+
       function isTimeLine(line) {
         if (!line) return false;
         const upper = line.toUpperCase();
         if (upper === 'TBD' || upper === 'TBA') return true;
         return /^(\d{1,2})(?::(\d{2}))?\s*(?:AM|PM)?$/i.test(line);
       }
-      let i=0;
-      while (i<lines.length) {
+
+      function isDateLine(line) {
+        return /^\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s*[-–]\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/.test(line) ||
+               /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/.test(line);
+      }
+
+      while (i < lines.length) {
         const line = lines[i];
         if (!line) { i++; continue; }
+
         const cat = isCategoryLine(line);
-        if (cat) { currentCategory = cat; i++; continue; }
-        const range = line.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
-        const single = line.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
-        if (range || single) {
-          let dateStr='', endDateStr='';
-          if (range) {
-            let m1=parseInt(range[1]), d1=parseInt(range[2]), y1=parseInt(range[3]);
-            let m2=parseInt(range[4]), d2=parseInt(range[5]), y2=parseInt(range[6]);
-            if (y1<100) y1+=2000; if (y2<100) y2+=2000;
+        if (cat) {
+          currentCategory = cat;
+          i++;
+          continue;
+        }
+
+        if (line.toUpperCase() === 'TBD' || line.toUpperCase() === 'TBA') {
+          i++;
+          continue;
+        }
+
+        const rangeMatch = line.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s*[-–]\s*(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+        const singleMatch = line.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+
+        if (rangeMatch || singleMatch) {
+          let dateStr = '', endDateStr = '';
+          if (rangeMatch) {
+            let m1 = parseInt(rangeMatch[1]), d1 = parseInt(rangeMatch[2]);
+            let y1 = rangeMatch[3] ? parseInt(rangeMatch[3]) : null;
+            let m2 = parseInt(rangeMatch[4]), d2 = parseInt(rangeMatch[5]);
+            let y2 = rangeMatch[6] ? parseInt(rangeMatch[6]) : null;
+            if (y1 && y1 < 100) y1 += 2000;
+            if (y2 && y2 < 100) y2 += 2000;
+            if (!y1) { const now = new Date(); y1 = now.getFullYear(); if (m1 < now.getMonth()+1 || (m1 === now.getMonth()+1 && d1 < now.getDate())) y1 += 1; }
+            if (!y2) { y2 = y1; }
             dateStr = `${y1}-${String(m1).padStart(2,'0')}-${String(d1).padStart(2,'0')}`;
             endDateStr = `${y2}-${String(m2).padStart(2,'0')}-${String(d2).padStart(2,'0')}`;
           } else {
-            let m=parseInt(single[1]), d=parseInt(single[2]);
-            let y=single[3]?parseInt(single[3]):null;
-            if (y && y<100) y+=2000;
-            if (!y) { const now=new Date(); y=now.getFullYear(); if (m<now.getMonth()+1 || (m===now.getMonth()+1 && d<now.getDate())) y+=1; }
+            let m = parseInt(singleMatch[1]), d = parseInt(singleMatch[2]);
+            let y = singleMatch[3] ? parseInt(singleMatch[3]) : null;
+            if (y && y < 100) y += 2000;
+            if (!y) { const now = new Date(); y = now.getFullYear(); if (m < now.getMonth()+1 || (m === now.getMonth()+1 && d < now.getDate())) y += 1; }
             dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
           }
-          let opponent = (i+1<lines.length) ? lines[i+1] : '';
-          if (/\d{1,2}\/\d{1,2}/.test(opponent) || isCategoryLine(opponent)) opponent = '';
+
+          i++;
+          let opponent = (i < lines.length) ? lines[i] : '';
+          while (opponent && (isDateLine(opponent) || isCategoryLine(opponent) || opponent.toUpperCase() === 'TBD' || opponent.toUpperCase() === 'TBA')) {
+            i++;
+            opponent = (i < lines.length) ? lines[i] : '';
+          }
+
           let notes = '';
           if (opponent.includes('*')) {
             const dash = opponent.match(/^(.*?)\s*[-–]\s*(.*)$/);
             if (dash) { opponent = dash[1].trim(); notes = dash[2].trim(); }
           }
+
+          i++;
           let location = 'Home';
           let startTime = '';
-          let nextLine = (i+2<lines.length) ? lines[i+2] : '';
-          let timeLine = (i+3<lines.length) ? lines[i+3] : '';
+          let nextLine = (i < lines.length) ? lines[i] : '';
+
           if (isTimeLine(nextLine)) {
             startTime = nextLine;
-          } else if (nextLine && !isCategoryLine(nextLine) && !/\d{1,2}\/\d{1,2}/.test(nextLine)) {
+            i++;
+          } else if (nextLine && !isDateLine(nextLine) && !isCategoryLine(nextLine) && nextLine.toUpperCase() !== 'TBD') {
             location = nextLine;
-            if (timeLine && isTimeLine(timeLine)) startTime = timeLine;
+            i++;
+            let timeLine = (i < lines.length) ? lines[i] : '';
+            if (isTimeLine(timeLine)) {
+              startTime = timeLine;
+              i++;
+            }
           }
-          if (startTime && (startTime.toUpperCase()==='TBD' || startTime.toUpperCase()==='TBA')) startTime = '';
+
+          if (startTime && (startTime.toUpperCase() === 'TBD' || startTime.toUpperCase() === 'TBA')) {
+            startTime = '';
+          }
+
           if (opponent && !/^\d/.test(opponent)) {
-            events.push({ date:dateStr, endDate:endDateStr, startTime, category:currentCategory, opponent, location, noSpotify:false, paymentStatus:'', paymentAmount:'', notes });
+            events.push({
+              date: dateStr,
+              endDate: endDateStr,
+              startTime: startTime,
+              category: currentCategory,
+              opponent: opponent,
+              location: location,
+              noSpotify: false,
+              paymentStatus: '',
+              paymentAmount: '',
+              notes: notes
+            });
           }
-          i += 4;
-        } else { i++; }
+        } else {
+          i++;
+        }
       }
       return events;
     }
