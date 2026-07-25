@@ -864,17 +864,25 @@
     }
 
     async function addAllNewEvents(events) {
-      for (const ev of events) {
-        if (!state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent)) {
-          try {
-            await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
-          } catch(e) { console.warn(e); }
-        }
+  let added = 0;
+  for (const ev of events) {
+    if (!state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent)) {
+      try {
+        await createEvent({ ...ev, paymentStatus: state.adminSettings.defaultPayment });
+        added++;
+        // Show progress
+        document.getElementById('quickResults').innerHTML = `<p>Added ${added}/${events.length} events...</p>`;
+        // Wait 1 second between each event (to avoid rate limits)
+        await new Promise(r => setTimeout(r, 1000));
+      } catch(e) {
+        console.warn('Failed to add:', ev.opponent, e);
       }
-      toast('All new events added','success');
-      await fetchAllEvents();
-      renderAll();
     }
+  }
+  toast(`✅ Added ${added} new events`, 'success');
+  await fetchAllEvents();
+  renderAll();
+}
 
     // ─── Parser ───
     function parseFreeText(text) {
