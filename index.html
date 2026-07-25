@@ -1005,7 +1005,7 @@
             }
           });
           gisReady = true;
-          try { tokenClient.requestAccessToken({ prompt: '' }); } catch (e) { /* ignore */ }
+      
         } catch (e) {
           console.error('GIS init error:', e);
           toast('Google auth init failed. Check console.', 'error');
