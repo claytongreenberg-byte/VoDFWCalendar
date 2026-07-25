@@ -174,8 +174,9 @@
     // ═══════════════════════ CONFIG ═══════════════════════
     const CONFIG = {
       CLIENT_ID: '276309131384-dtugf0pjg1p4ukludc4a72hbqe4hthgu.apps.googleusercontent.com',
+      YOUR_EMAIL: 'claytongreenberg@gmail.com',
       GINGER_EMAIL: 'greenbergginger@gmail.com',
-      YOUR_EMAIL: 'cgreenberg@lmlawyers.com',
+      WORK_EMAIL: 'cgreenberg@lmlawyers.com',
       CONFLICT_BUFFER_HOURS: 2,
       EVENT_DURATION_MINUTES: 60,
       TIMEZONE: 'America/Chicago',
@@ -602,7 +603,7 @@
               description: desc,
               start: allDay ? { date: ds } : { dateTime: sd.toISOString(), timeZone: CONFIG.TIMEZONE },
               end: allDay ? { date: ed.toISOString().split('T')[0] } : { dateTime: ed.toISOString(), timeZone: CONFIG.TIMEZONE },
-              attendees: [{ email: CONFIG.YOUR_EMAIL }, { email: CONFIG.GINGER_EMAIL }],
+              attendees: [{ email: CONFIG.YOUR_EMAIL }, { email: CONFIG.GINGER_EMAIL }, { email: CONFIG.WORK_EMAIL }],
               reminders: {
                 useDefault: false,
                 overrides: [
