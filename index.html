@@ -6,7 +6,6 @@
   <title>PA Calendar</title>
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
   <style>
-    /* Minimal – same as before */
     :root {
       --bg: #0f0f1a; --surface: #1a1a2e; --surface2: #16213e;
       --text: #e0e0e0; --text2: #a0a0b0; --accent: #4fc3f7;
@@ -78,7 +77,7 @@
   <div class="toast-container" id="toastContainer" style="position:fixed; bottom:100px; right:12px; z-index:9999; display:flex; flex-direction:column; gap:4px; max-width:280px;"></div>
 
   <script>
-    // ═══════════════════════ CONFIG (updated with new credentials) ═══════════════════════
+    // ═══════════════════════ CONFIG ═══════════════════════
     const CONFIG = {
       CLIENT_ID: '821059030537-lpnpb03q9qrh9tatsg59vev7f3rkukmo.apps.googleusercontent.com',
       API_KEY: 'AIzaSyDDFcKk5AV-oxfp0ydvAq7f0mF5Ol_SKcE',
@@ -93,22 +92,12 @@
     function gid() { return 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2,6); }
     function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
-    // ─── PA Filter ───
-    function isPAEvent(calEvent) {
-      if (!calEvent) return false;
-      const sum = calEvent.summary || '';
-      if (sum.startsWith('PA ') || sum.startsWith('pa ')) return true;
-      if (sum.includes('NO SPOTIFY') || sum.includes('⭐')) return true;
-      const priv = calEvent.extendedProperties?.private || {};
-      if (priv.category || priv.appStatus || priv.paymentStatus) return true;
-      return false;
-    }
-
     // ─── State ───
     let state = {
       accessToken: null,
       user: null,
-      events: [],          // only PA events
+      events: [],
+      filterPAOnly: false,  // toggle for PA filter
       activeTab: 'month',
       selectedDay: null,
       weekStart: null,
@@ -142,9 +131,12 @@
         if (s) state.adminSettings = JSON.parse(s);
         const d = localStorage.getItem('paShowDeclined');
         if (d !== null) state.showDeclined = d === 'true';
+        const f = localStorage.getItem('paFilterPA');
+        if (f !== null) state.filterPAOnly = f === 'true';
       } catch(e){}
     }
     function saveAdmin() { localStorage.setItem('paAdmin', JSON.stringify(state.adminSettings)); }
+    function saveFilter() { localStorage.setItem('paFilterPA', String(state.filterPAOnly)); }
     function saveToken(t) { state.accessToken = t; localStorage.setItem('paToken', t); }
     function clearToken() { state.accessToken = null; state.user = null; localStorage.removeItem('paToken'); }
 
@@ -203,7 +195,7 @@
       return response;
     }
 
-    // ─── Fetch All Events (only PA) ───
+    // ─── Fetch All Events (with optional PA filter) ───
     async function fetchAllEvents() {
       if (!state.accessToken) return;
       if (state.syncInProgress) return;
@@ -222,16 +214,34 @@
           if (d.items) all = all.concat(d.items);
           pt = d.nextPageToken;
         } while (pt);
-        // Filter PA events and parse
-        state.events = all.filter(isPAEvent).map(parseCalEventToLocal).filter(Boolean);
+        // Parse all events
+        let parsed = all.map(parseCalEventToLocal).filter(Boolean);
+        // Apply PA filter if enabled
+        if (state.filterPAOnly) {
+          parsed = parsed.filter(e => isPAEvent(e));
+        }
+        state.events = parsed;
         state.events.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
-        toast(`Loaded ${state.events.length} PA events`,'success');
+        toast(`Loaded ${state.events.length} events`,'success');
       } catch(e) {
         toast('Failed to load events: '+e.message,'error');
         console.error(e);
       }
       state.syncInProgress = false;
       renderAll();
+    }
+
+    // ─── PA Filter ───
+    function isPAEvent(ev) {
+      if (!ev) return false;
+      const sum = ev.summary || ev.opponent || '';
+      // Check categories
+      for (const cat of state.adminSettings.categories) {
+        if (sum.includes(cat)) return true;
+      }
+      if (sum.includes('PA ') || sum.includes('NO SPOTIFY') || sum.includes('⭐')) return true;
+      if (ev.category && ev.category !== 'Other') return true;
+      return false;
     }
 
     function parseCalEventToLocal(cal) {
@@ -800,11 +810,20 @@
           <button class="btn" onclick="importBackup()">📤 Restore</button>
         </div>
         <div style="margin:12px 0;">
+          <label><input type="checkbox" ${state.filterPAOnly?'checked':''} onchange="togglePAFilter()"> Show only PA events</label>
+        </div>
+        <div style="margin:12px 0;">
           <label><input type="checkbox" ${state.showDeclined?'checked':''} onchange="state.showDeclined=!state.showDeclined;renderAll();"> Show declined events</label>
         </div>
-        <p style="font-size:0.7rem;color:var(--text2);margin-top:8px;">ℹ️ Only PA events (created by this app) are shown.</p>
+        <p style="font-size:0.7rem;color:var(--text2);margin-top:8px;">ℹ️ ${state.filterPAOnly ? 'Showing only PA events' : 'Showing all events'}</p>
       `;
       c.innerHTML = html;
+    }
+
+    function togglePAFilter() {
+      state.filterPAOnly = !state.filterPAOnly;
+      saveFilter();
+      fetchAllEvents();
     }
 
     // ─── Quick Add ───
@@ -960,18 +979,18 @@
       input.click();
     }
 
-    // ─── Delete all PA events ───
+    // ─── Delete all events ───
     async function deleteAllGoogleEvents() {
       if (!state.accessToken) { toast('Connect first','error'); return; }
       const evs = state.events.filter(e => e.calendarEventId);
-      if (!evs.length) { toast('No PA events to delete','info'); return; }
-      if (!confirm(`Delete ${evs.length} PA events from Google Calendar?`)) return;
+      if (!evs.length) { toast('No events to delete','info'); return; }
+      if (!confirm(`Delete ${evs.length} events from Google Calendar?`)) return;
       for (const ev of evs) {
         try {
           await deleteEventFromGoogle(ev.calendarEventId);
         } catch(e) { console.warn(e); }
       }
-      toast('Deleted '+evs.length+' PA events','success');
+      toast('Deleted '+evs.length+' events','success');
       await fetchAllEvents();
     }
 
