@@ -6,7 +6,7 @@
   <title>PA Calendar</title>
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
   <style>
-    /* Minimal styling – clean and mobile-friendly */
+    /* Minimal – same as before */
     :root {
       --bg: #0f0f1a; --surface: #1a1a2e; --surface2: #16213e;
       --text: #e0e0e0; --text2: #a0a0b0; --accent: #4fc3f7;
@@ -93,11 +93,22 @@
     function gid() { return 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2,6); }
     function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 
-    // ─── State (only token and in‑memory events) ───
+    // ─── PA Filter ───
+    function isPAEvent(calEvent) {
+      if (!calEvent) return false;
+      const sum = calEvent.summary || '';
+      if (sum.startsWith('PA ') || sum.startsWith('pa ')) return true;
+      if (sum.includes('NO SPOTIFY') || sum.includes('⭐')) return true;
+      const priv = calEvent.extendedProperties?.private || {};
+      if (priv.category || priv.appStatus || priv.paymentStatus) return true;
+      return false;
+    }
+
+    // ─── State ───
     let state = {
       accessToken: null,
       user: null,
-      events: [],          // all events fetched from Google
+      events: [],          // only PA events
       activeTab: 'month',
       selectedDay: null,
       weekStart: null,
@@ -192,6 +203,7 @@
       return response;
     }
 
+    // ─── Fetch All Events (only PA) ───
     async function fetchAllEvents() {
       if (!state.accessToken) return;
       if (state.syncInProgress) return;
@@ -210,18 +222,15 @@
           if (d.items) all = all.concat(d.items);
           pt = d.nextPageToken;
         } while (pt);
-        // Convert to our internal format
-        state.events = all.map(parseCalEventToLocal).filter(Boolean);
-        // Sort by date
+        // Filter PA events and parse
+        state.events = all.filter(isPAEvent).map(parseCalEventToLocal).filter(Boolean);
         state.events.sort((a,b) => a.date.localeCompare(b.date) || (a.startTime||'00:00').localeCompare(b.startTime||'00:00'));
-        saveAdmin();
-        toast(`Loaded ${state.events.length} events`,'success');
+        toast(`Loaded ${state.events.length} PA events`,'success');
       } catch(e) {
         toast('Failed to load events: '+e.message,'error');
         console.error(e);
       }
       state.syncInProgress = false;
-      // Re-render after fetch
       renderAll();
     }
 
@@ -278,6 +287,7 @@
       };
     }
 
+    // ─── Create / Update / Delete ───
     async function createEvent(d) {
       if (!state.accessToken) { toast('Connect first','error'); return; }
       const ev = {
@@ -311,8 +321,6 @@
         body: JSON.stringify(ev)
       });
       if (!r.ok) { const err = await r.json(); throw new Error(err.error?.message || 'Create failed'); }
-      const data = await r.json();
-      toast('Event created ✅','success');
       await fetchAllEvents();
     }
 
@@ -379,7 +387,6 @@
     // ─── Resolve Conflicts ───
     async function resolveConflictKeepBoth(id1, id2) {
       if (!state.accessToken) return;
-      // Mark both as resolved in extendedProperties
       const patch = { extendedProperties: { private: { _conflictResolved: 'true' } } };
       await updateEvent(id1, patch);
       await updateEvent(id2, patch);
@@ -389,7 +396,6 @@
 
     async function resolveConflictChooseOne(keepId, declineId) {
       if (!state.accessToken) return;
-      // Mark keep as resolved, decline the other
       await updateEvent(keepId, { extendedProperties: { private: { _conflictResolved: 'true', _declinedFrom: declineId } } });
       await updateEvent(declineId, { extendedProperties: { private: { _conflictResolved: 'true', appStatus: 'declined' } } });
       toast('✅ Kept one, declined the other','success');
@@ -420,6 +426,13 @@
       if (s === 'Paid Later') return 'pay-later';
       if (s === 'Paid ✅') return 'pay-paid';
       return 'pay-volunteer';
+    }
+    function buildDescription(ev) {
+      let desc = '';
+      if (ev.noSpotify) desc += '🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n';
+      if (ev.paymentAmount) desc += '💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n';
+      if (ev.notes) desc += '📝 '+ev.notes+'\n';
+      return desc;
     }
 
     // ─── Render Functions ───
@@ -502,7 +515,6 @@
 
     // ─── Week View ───
     function renderWeek() {
-      // simplified: just show a list of events for the next 7 days from today
       const c = document.getElementById('content');
       const today = new Date().toISOString().split('T')[0];
       const end = new Date();
@@ -635,7 +647,6 @@
       if (!ev) return;
       ev.status = newStatus;
       if (newStatus === 'declined') {
-        // Remove from Google? We'll just mark it as declined in extendedProperties
         await updateEvent(id, { extendedProperties: { private: { appStatus: 'declined' } } });
       } else {
         await updateEvent(id, { extendedProperties: { private: { appStatus: newStatus } } });
@@ -648,7 +659,6 @@
       if (!ev) return;
       const newVal = !ev.noSpotify;
       ev.noSpotify = newVal;
-      // Update the event in Google
       const summary = getTitle(ev);
       const description = buildDescription(ev);
       await updateEvent(id, {
@@ -658,14 +668,6 @@
       });
       await fetchAllEvents();
       toast(newVal ? '🚫 Spotify blocked' : '🎵 Spotify allowed','info');
-    }
-
-    function buildDescription(ev) {
-      let desc = '';
-      if (ev.noSpotify) desc += '🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n';
-      if (ev.paymentAmount) desc += '💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n';
-      if (ev.notes) desc += '📝 '+ev.notes+'\n';
-      return desc;
     }
 
     async function deleteEvent(id) {
@@ -760,7 +762,6 @@
       const paymentStatus = document.getElementById('editPayment').value;
       const paymentAmount = document.getElementById('editAmount').value.trim();
       try {
-        // Build update
         const updates = {
           summary: getTitle({ category, opponent, location, noSpotify }),
           description: buildDescription({ noSpotify, paymentAmount, paymentStatus, notes }),
@@ -793,7 +794,7 @@
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary" onclick="fetchAllEvents()">🔄 Sync</button>
-          <button class="btn btn-danger" onclick="if(confirm('Delete ALL events from Google Calendar?'))deleteAllGoogleEvents()">🔥 Delete All</button>
+          <button class="btn btn-danger" onclick="if(confirm('Delete ALL PA events from Google Calendar?'))deleteAllGoogleEvents()">🔥 Delete All PA</button>
           <button class="btn" onclick="showQuickAddUI()">📥 Quick Add</button>
           <button class="btn" onclick="exportData()">📥 Backup</button>
           <button class="btn" onclick="importBackup()">📤 Restore</button>
@@ -801,6 +802,7 @@
         <div style="margin:12px 0;">
           <label><input type="checkbox" ${state.showDeclined?'checked':''} onchange="state.showDeclined=!state.showDeclined;renderAll();"> Show declined events</label>
         </div>
+        <p style="font-size:0.7rem;color:var(--text2);margin-top:8px;">ℹ️ Only PA events (created by this app) are shown.</p>
       `;
       c.innerHTML = html;
     }
@@ -824,7 +826,6 @@
       const events = parseFreeText(text);
       if (!events.length) { toast('No events parsed','error'); return; }
       let html = `<p>Found ${events.length} events:</p>`;
-      let added = 0;
       for (const ev of events) {
         const exists = state.events.some(e => e.date === ev.date && e.startTime === ev.startTime && e.opponent === ev.opponent);
         html += `<div class="val-item ${exists?'val-match':'val-missing'}">
@@ -948,7 +949,6 @@
             if (data.events && data.adminSettings) {
               state.adminSettings = data.adminSettings;
               saveAdmin();
-              // We would need to re-create events in Google – but for now just show a notice
               toast('Backup loaded. You need to re-import events manually.','info');
             } else {
               toast('Invalid backup file','error');
@@ -960,17 +960,18 @@
       input.click();
     }
 
-    // ─── Delete all Google events ───
+    // ─── Delete all PA events ───
     async function deleteAllGoogleEvents() {
       if (!state.accessToken) { toast('Connect first','error'); return; }
       const evs = state.events.filter(e => e.calendarEventId);
-      if (!evs.length) { toast('No events to delete','info'); return; }
+      if (!evs.length) { toast('No PA events to delete','info'); return; }
+      if (!confirm(`Delete ${evs.length} PA events from Google Calendar?`)) return;
       for (const ev of evs) {
         try {
           await deleteEventFromGoogle(ev.calendarEventId);
         } catch(e) { console.warn(e); }
       }
-      toast('Deleted '+evs.length+' events','success');
+      toast('Deleted '+evs.length+' PA events','success');
       await fetchAllEvents();
     }
 
@@ -983,12 +984,9 @@
         renderAll();
       }
       loadGis();
-      // Set selectedDay to today if not set
       if (!state.selectedDay) state.selectedDay = new Date();
-      // Set weekStart
       const now = new Date();
       state.weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-      // Bottom nav click
       document.querySelectorAll('.nav-item').forEach(el => {
         el.addEventListener('click', () => switchTab(el.dataset.tab));
       });
@@ -1011,12 +1009,10 @@
       document.head.appendChild(s);
     }
 
-    // ─── Print ───
     function printCurrentView() {
       window.print();
     }
 
-    // ─── Start ───
     document.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
