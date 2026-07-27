@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,12 +56,12 @@ async function processOfflineQueue(){while(offlineQueue.length&&isOnline){const 
 function fetchWithTimeout(resource,options,timeout=5000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Storage request timed out')),timeout);fetch(resource,options).then(r=>{clearTimeout(timer);resolve(r)}).catch(e=>{clearTimeout(timer);reject(e)})})}
 window.storage={_base:CONFIG.WORKER_URL+'/storage',async get(key){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{headers:{'Authorization':'Bearer '+(state.accessToken||'')}});if(!r.ok)return null;const text=await r.text();return text?{value:text}:null}catch(e){return null}},async set(key,value){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{method:'PUT',headers:{'Authorization':'Bearer '+(state.accessToken||''),'Content-Type':'text/plain'},body:value});return r.ok}catch(e){return false}},async delete(key){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{method:'DELETE',headers:{'Authorization':'Bearer '+(state.accessToken||'')}});return r.ok}catch(e){return false}}};
 
-async function apiCall(path,options={}){const url=CONFIG.WORKER_URL+path;const headers={'Authorization':'Bearer '+state.accessToken,'Content-Type':'application/json'};if(options.headers)Object.assign(headers,options.headers);const fetchOptions={method:options.method||'GET',headers:headers};if(options.body)fetchOptions.body=options.body;const response=await fetch(url,fetchOptions);const text=await response.text();if(!response.ok){let errorMsg='API error';try{const errData=JSON.parse(text);errorMsg=errData.error||errData.error?.message||errorMsg}catch(e){}throw new Error(errorMsg)}return text?JSON.parse(text):{}}
+async function apiCall(path,options={},_retried){const url=CONFIG.WORKER_URL+path;const headers={'Authorization':'Bearer '+state.accessToken,'Content-Type':'application/json'};if(options.headers)Object.assign(headers,options.headers);const fetchOptions={method:options.method||'GET',headers:headers};if(options.body)fetchOptions.body=options.body;const response=await fetch(url,fetchOptions);const text=await response.text();if(!response.ok){if(response.status===401&&!_retried&&tokenClient){try{await refreshGoogleToken();return apiCall(path,options,true)}catch(refreshErr){console.warn('Token refresh failed:',refreshErr)}}let errorMsg='API error';try{const errData=JSON.parse(text);errorMsg=errData.error||errData.error?.message||errorMsg}catch(e){}throw new Error(errorMsg)}return text?JSON.parse(text):{}}
 
 async function refreshGoogleToken(){if(!tokenClient)throw new Error('Token client not loaded');return new Promise((resolve,reject)=>{const oc=tokenClient.callback;tokenClient.callback=(resp)=>{tokenClient.callback=oc;if(resp.error)reject(new Error(resp.error));else{state.accessToken=resp.access_token;resolve(resp.access_token)}};tokenClient.requestAccessToken({prompt:''})})}
 
 let calendarQueue=Promise.resolve();
-function enqueueCalendarTask(fn){calendarQueue=calendarQueue.then(()=>new Promise(r=>setTimeout(r,300))).then(fn);return calendarQueue}
+function enqueueCalendarTask(fn){const task=calendarQueue.catch(()=>{}).then(()=>new Promise(r=>setTimeout(r,300))).then(fn);calendarQueue=task.catch(()=>{});return task}
 const inFlight=new Set();
 function setInFlight(id,v){v?inFlight.add(id):inFlight.delete(id);updateAllButtons()}
 function updateAllButtons(){document.querySelectorAll('.event-card').forEach(c=>{const m=c.getAttribute('onclick')?.match(/editEvent\('(.*?)'\)/);if(m){const busy=inFlight.has(m[1]);c.querySelectorAll('button').forEach(b=>{b.disabled=busy||!isOnline})}})}
@@ -80,7 +81,7 @@ async function saveState(){if(!window.storage)return;if(saveInFlight){savePendin
 
 function clearAuth(){state.accessToken=null;state.user=null;renderAll();toast('Signed out','info')}
 function handleAuth(){if(state.accessToken&&state.user){clearAuth();return}if(!gisReady||!tokenClient){toast('⚠️ Google auth not loaded.','error');return}manualAuthRequested=true;tokenClient.requestAccessToken()}
-async function handleTokenResponse(r){if(r.access_token){state.accessToken=r.access_token;await fetchUserInfo();toast('Connected!','success');renderAll();setTimeout(()=>syncWithCalendar(true),500)}}
+async function handleTokenResponse(r){if(r.access_token){state.accessToken=r.access_token;await fetchUserInfo();const localOnlyEvents=state.events.filter(e=>!e.calendarEventId);await loadState();for(const le of localOnlyEvents){if(!state.events.some(e=>e.id===le.id))state.events.push(le)}repairState();await updateConflictState();toast('Connected!','success');renderAll();setTimeout(()=>syncWithCalendar(true),500)}}
 async function fetchUserInfo(){if(!state.accessToken)return;try{const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+state.accessToken}});if(!r.ok)throw new Error('invalid');state.user=await r.json()}catch(e){state.accessToken=null;state.user=null}renderUserBar()}
 function renderUserBar(){const bar=document.getElementById('userBar');const pb='<button class="btn-outline btn-sm" onclick="printCurrentView()" title="Print">🖨️</button>';if(state.user){const i=(state.user.name||state.user.email||'?')[0].toUpperCase();bar.innerHTML='<div class="avatar">'+i+'</div><span>'+state.user.email+'</span><button class="btn-outline btn-xs" onclick="clearAuth()">Out</button>'+pb}else bar.innerHTML='<button class="btn-outline btn-sm" onclick="handleAuth()" id="authBtn">🔗 Connect</button>'+pb}
 function isDuplicate(e1,e2){if(e1.id===e2.id)return false;const n=e=>({date:e.date,startTime:e.startTime||'',category:(e.category||'').trim().toLowerCase(),opponent:(e.opponent||'').trim().toLowerCase().replace(/^vs\s+/i,'')});const a=n(e1),b=n(e2);return a.date===b.date&&a.startTime===b.startTime&&a.category===b.category&&a.opponent===b.opponent}
@@ -190,6 +191,7 @@ function loadGis(){const s=document.createElement('script');s.src='https://accou
 window.addEventListener('focus',()=>{if(state.accessToken&&!state.syncInProgress)syncWithCalendar(true)});
 setInterval(()=>{if(state.accessToken&&!state.syncInProgress&&document.hasFocus())syncWithCalendar(true)},300000);
 setInterval(()=>{if(isOnline&&offlineQueue.length>0)processOfflineQueue()},30000);
+setInterval(()=>{if(state.accessToken&&tokenClient)refreshGoogleToken().catch(e=>console.warn('Proactive token refresh failed:',e))},45*60*1000);
 init();
 </script>
 </body>
