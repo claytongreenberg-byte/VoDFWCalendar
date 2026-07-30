@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -56,9 +55,46 @@ async function processOfflineQueue(){while(offlineQueue.length&&isOnline){const 
 function fetchWithTimeout(resource,options,timeout=5000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Storage request timed out')),timeout);fetch(resource,options).then(r=>{clearTimeout(timer);resolve(r)}).catch(e=>{clearTimeout(timer);reject(e)})})}
 window.storage={_base:CONFIG.WORKER_URL+'/storage',async get(key){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{headers:{'Authorization':'Bearer '+(state.accessToken||'')}});if(!r.ok)return null;const text=await r.text();return text?{value:text}:null}catch(e){return null}},async set(key,value){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{method:'PUT',headers:{'Authorization':'Bearer '+(state.accessToken||''),'Content-Type':'text/plain'},body:value});return r.ok}catch(e){return false}},async delete(key){try{const r=await fetchWithTimeout(this._base+'?key='+encodeURIComponent(key),{method:'DELETE',headers:{'Authorization':'Bearer '+(state.accessToken||'')}});return r.ok}catch(e){return false}}};
 
-async function apiCall(path,options={},_retried){const url=CONFIG.WORKER_URL+path;const headers={'Authorization':'Bearer '+state.accessToken,'Content-Type':'application/json'};if(options.headers)Object.assign(headers,options.headers);const fetchOptions={method:options.method||'GET',headers:headers};if(options.body)fetchOptions.body=options.body;const response=await fetch(url,fetchOptions);const text=await response.text();if(!response.ok){if(response.status===401&&!_retried&&tokenClient){try{await refreshGoogleToken();return apiCall(path,options,true)}catch(refreshErr){console.warn('Token refresh failed:',refreshErr)}}let errorMsg='API error';try{const errData=JSON.parse(text);errorMsg=errData.error||errData.error?.message||errorMsg}catch(e){}throw new Error(errorMsg)}return text?JSON.parse(text):{}}
+// ---------- FIXED: proper error parsing & retry flag ----------
+async function apiCall(path,options={},_retried){
+  const url=CONFIG.WORKER_URL+path;
+  const headers={'Authorization':'Bearer '+state.accessToken,'Content-Type':'application/json'};
+  if(options.headers)Object.assign(headers,options.headers);
+  const fetchOptions={method:options.method||'GET',headers:headers};
+  if(options.body)fetchOptions.body=options.body;
+  const response=await fetch(url,fetchOptions);
+  const text=await response.text();
+  if(!response.ok){
+    // Refresh token once on 401
+    if(response.status===401&&!_retried&&tokenClient){
+      try{await refreshGoogleToken();return apiCall(path,options,true)}catch(refreshErr){console.warn('Token refresh failed:',refreshErr)}
+    }
+    let errorMsg='API error';
+    try{
+      const errData=JSON.parse(text);
+      if(errData?.error){
+        errorMsg = typeof errData.error === 'string' ? errData.error : (errData.error.message || 'Unknown API error');
+      }
+    }catch(e){}
+    const err = new Error('('+response.status+') '+errorMsg);
+    err.retryable = response.status===429||response.status===403||response.status>=500;
+    throw err;
+  }
+  return text ? JSON.parse(text) : {};
+}
 
-async function refreshGoogleToken(){if(!tokenClient)throw new Error('Token client not loaded');return new Promise((resolve,reject)=>{const oc=tokenClient.callback;tokenClient.callback=(resp)=>{tokenClient.callback=oc;if(resp.error)reject(new Error(resp.error));else{state.accessToken=resp.access_token;resolve(resp.access_token)}};tokenClient.requestAccessToken({prompt:''})})}
+async function refreshGoogleToken(){
+  if(!tokenClient)throw new Error('Token client not loaded');
+  return new Promise((resolve,reject)=>{
+    const oc=tokenClient.callback;
+    tokenClient.callback=(resp)=>{
+      tokenClient.callback=oc;
+      if(resp.error)reject(new Error(resp.error));
+      else{state.accessToken=resp.access_token;resolve(resp.access_token)}
+    };
+    tokenClient.requestAccessToken({prompt:''});
+  });
+}
 
 let calendarQueue=Promise.resolve();
 function enqueueCalendarTask(fn){const task=calendarQueue.catch(()=>{}).then(()=>new Promise(r=>setTimeout(r,300))).then(fn);calendarQueue=task.catch(()=>{});return task}
@@ -70,20 +106,96 @@ const DEFAULT_ADMIN={categories:['Champion Sports','Lake Highlands Girls Basketb
 let state={accessToken:null,user:null,events:[],activeTab:'month',weekStart:null,selectedDay:null,adminSettings:JSON.parse(JSON.stringify(DEFAULT_ADMIN)),showAllUpcoming:false,showDeclined:true,showResolvedConflicts:false,selectedCategory:null,syncInProgress:false,notifiedToday:new Set(),lastSyncTime:null};
 let tokenClient=null,gisReady=false,manualAuthRequested=false;
 
-function repairState(){if(!Array.isArray(state.events))state.events=[];if(!state.adminSettings||typeof state.adminSettings!=='object'){state.adminSettings=JSON.parse(JSON.stringify(DEFAULT_ADMIN))}else{if(!Array.isArray(state.adminSettings.categories)||state.adminSettings.categories.length===0){state.adminSettings.categories=[...DEFAULT_ADMIN.categories]}if(!Array.isArray(state.adminSettings.paymentOptions)||state.adminSettings.paymentOptions.length===0){state.adminSettings.paymentOptions=[...DEFAULT_ADMIN.paymentOptions]}if(typeof state.adminSettings.defaultPayment!=='string'){state.adminSettings.defaultPayment=DEFAULT_ADMIN.defaultPayment}if(!state.adminSettings.emojis||typeof state.adminSettings.emojis!=='object'){state.adminSettings.emojis={...DEFAULT_ADMIN.emojis}}}if(state.showDeclined===undefined)state.showDeclined=true;const bc=state.events.length;state.events=state.events.filter(Boolean).map(ev=>({id:ev.id||gid(),date:ev.date||'',startTime:ev.startTime||'',endDate:ev.endDate||'',category:ev.category||'Other',opponent:ev.opponent||'',location:ev.location||'',notes:ev.notes||'',noSpotify:!!ev.noSpotify,paymentStatus:ev.paymentStatus||'Paid Later',paymentAmount:ev.paymentAmount||'',paymentPaid:!!ev.paymentPaid,status:ev.status||'pending',calendarEventId:ev.calendarEventId||null,createdAt:ev.createdAt||new Date().toISOString(),_conflictCleared:!!ev._conflictCleared,_declinedFrom:ev._declinedFrom||null,hasConflict:false,conflictWith:[]})).filter(ev=>{if(isValidDateStr(ev.date))return true;console.warn('Dropping event with invalid date:',ev);return false});const dc=bc-state.events.length;if(dc>0)toast('⚠️ Removed '+dc+' event(s) with invalid/blank dates','error');saveState()}
+function repairState(){
+  if(!Array.isArray(state.events))state.events=[];
+  if(!state.adminSettings||typeof state.adminSettings!=='object'){state.adminSettings=JSON.parse(JSON.stringify(DEFAULT_ADMIN))}
+  else{
+    if(!Array.isArray(state.adminSettings.categories)||state.adminSettings.categories.length===0){state.adminSettings.categories=[...DEFAULT_ADMIN.categories]}
+    if(!Array.isArray(state.adminSettings.paymentOptions)||state.adminSettings.paymentOptions.length===0){state.adminSettings.paymentOptions=[...DEFAULT_ADMIN.paymentOptions]}
+    if(typeof state.adminSettings.defaultPayment!=='string'){state.adminSettings.defaultPayment=DEFAULT_ADMIN.defaultPayment}
+    if(!state.adminSettings.emojis||typeof state.adminSettings.emojis!=='object'){state.adminSettings.emojis={...DEFAULT_ADMIN.emojis}}
+  }
+  if(state.showDeclined===undefined)state.showDeclined=true;
+  const bc=state.events.length;
+  state.events=state.events.filter(Boolean).map(ev=>({
+    id:ev.id||gid(),date:ev.date||'',startTime:ev.startTime||'',endDate:ev.endDate||'',
+    category:ev.category||'Other',opponent:ev.opponent||'',location:ev.location||'',
+    notes:ev.notes||'',noSpotify:!!ev.noSpotify,paymentStatus:ev.paymentStatus||'Paid Later',
+    paymentAmount:ev.paymentAmount||'',paymentPaid:!!ev.paymentPaid,status:ev.status||'pending',
+    calendarEventId:ev.calendarEventId||null,createdAt:ev.createdAt||new Date().toISOString(),
+    _conflictCleared:!!ev._conflictCleared,_declinedFrom:ev._declinedFrom||null,
+    hasConflict:false,conflictWith:[], _pushRetries: ev._pushRetries || 0   // retry counter
+  })).filter(ev=>{
+    if(isValidDateStr(ev.date))return true;
+    console.warn('Dropping event with invalid date:',ev);return false;
+  });
+  const dc=bc-state.events.length;
+  if(dc>0)toast('⚠️ Removed '+dc+' event(s) with invalid/blank dates','error');
+  saveState();
+}
 function isValidDateStr(s){if(!s||typeof s!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const d=new Date(s+'T00:00:00');return!isNaN(d.getTime())}
 
-async function loadState(){if(!window.storage){console.warn('window.storage unavailable');return}try{const result=await window.storage.get(STORAGE_KEY);if(result&&result.value){const p=JSON.parse(result.value);state.events=Array.isArray(p.events)?p.events:[];state.adminSettings=p.adminSettings||JSON.parse(JSON.stringify(DEFAULT_ADMIN));state.showDeclined=p.showDeclined!==undefined?p.showDeclined:true;state.lastSyncTime=p.lastSyncTime||null}}catch(e){console.log('No existing PA Calendar data found:',e)}}
+async function loadState(){
+  if(!window.storage){console.warn('window.storage unavailable');return}
+  try{
+    const result=await window.storage.get(STORAGE_KEY);
+    if(result&&result.value){
+      const p=JSON.parse(result.value);
+      state.events=Array.isArray(p.events)?p.events:[];
+      state.adminSettings=p.adminSettings||JSON.parse(JSON.stringify(DEFAULT_ADMIN));
+      state.showDeclined=p.showDeclined!==undefined?p.showDeclined:true;
+      state.lastSyncTime=p.lastSyncTime||null;
+    }
+  }catch(e){console.log('No existing PA Calendar data found:',e)}
+}
 
 let saveInFlight=false,savePending=false,saveIndicatorTimer=null;
 function flashSaveIndicator(){const el=document.getElementById('saveIndicator');if(!el)return;el.classList.add('show');clearTimeout(saveIndicatorTimer);saveIndicatorTimer=setTimeout(()=>el.classList.remove('show'),900)}
-async function saveState(){if(!window.storage)return;if(saveInFlight){savePending=true;return}saveInFlight=true;flashSaveIndicator();try{const payload=JSON.stringify({events:state.events,adminSettings:state.adminSettings,showDeclined:state.showDeclined,lastSyncTime:state.lastSyncTime});const ok=await window.storage.set(STORAGE_KEY,payload);if(!ok)console.warn('Storage set returned false')}catch(e){console.error('Save error:',e)}finally{saveInFlight=false;if(savePending){savePending=false;setTimeout(saveState,250)}}}
+async function saveState(){
+  if(!window.storage)return;
+  if(saveInFlight){savePending=true;return}
+  saveInFlight=true;flashSaveIndicator();
+  try{
+    const payload=JSON.stringify({events:state.events,adminSettings:state.adminSettings,showDeclined:state.showDeclined,lastSyncTime:state.lastSyncTime});
+    const ok=await window.storage.set(STORAGE_KEY,payload);
+    if(!ok)console.warn('Storage set returned false')
+  }catch(e){console.error('Save error:',e)}
+  finally{saveInFlight=false;if(savePending){savePending=false;setTimeout(saveState,250)}}
+}
 
 function clearAuth(){state.accessToken=null;state.user=null;renderAll();toast('Signed out','info')}
 function handleAuth(){if(state.accessToken&&state.user){clearAuth();return}if(!gisReady||!tokenClient){toast('⚠️ Google auth not loaded.','error');return}manualAuthRequested=true;tokenClient.requestAccessToken()}
-async function handleTokenResponse(r){if(r.access_token){state.accessToken=r.access_token;await fetchUserInfo();const localOnlyEvents=state.events.filter(e=>!e.calendarEventId);await loadState();for(const le of localOnlyEvents){if(!state.events.some(e=>e.id===le.id))state.events.push(le)}repairState();await updateConflictState();toast('Connected!','success');renderAll();setTimeout(()=>syncWithCalendar(true),500)}}
-async function fetchUserInfo(){if(!state.accessToken)return;try{const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+state.accessToken}});if(!r.ok)throw new Error('invalid');state.user=await r.json()}catch(e){state.accessToken=null;state.user=null}renderUserBar()}
-function renderUserBar(){const bar=document.getElementById('userBar');const pb='<button class="btn-outline btn-sm" onclick="printCurrentView()" title="Print">🖨️</button>';if(state.user){const i=(state.user.name||state.user.email||'?')[0].toUpperCase();bar.innerHTML='<div class="avatar">'+i+'</div><span>'+state.user.email+'</span><button class="btn-outline btn-xs" onclick="clearAuth()">Out</button>'+pb}else bar.innerHTML='<button class="btn-outline btn-sm" onclick="handleAuth()" id="authBtn">🔗 Connect</button>'+pb}
+async function handleTokenResponse(r){
+  if(r.access_token){
+    state.accessToken=r.access_token;
+    await fetchUserInfo();
+    const localOnlyEvents=state.events.filter(e=>!e.calendarEventId);
+    await loadState();
+    for(const le of localOnlyEvents){if(!state.events.some(e=>e.id===le.id))state.events.push(le)}
+    repairState();
+    await updateConflictState();
+    toast('Connected!','success');
+    renderAll();
+    setTimeout(()=>syncWithCalendar(true),500);
+  }
+}
+async function fetchUserInfo(){
+  if(!state.accessToken)return;
+  try{
+    const r=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+state.accessToken}});
+    if(!r.ok)throw new Error('invalid');
+    state.user=await r.json();
+  }catch(e){state.accessToken=null;state.user=null}
+  renderUserBar();
+}
+function renderUserBar(){
+  const bar=document.getElementById('userBar');
+  const pb='<button class="btn-outline btn-sm" onclick="printCurrentView()" title="Print">🖨️</button>';
+  if(state.user){
+    const i=(state.user.name||state.user.email||'?')[0].toUpperCase();
+    bar.innerHTML='<div class="avatar">'+i+'</div><span>'+state.user.email+'</span><button class="btn-outline btn-xs" onclick="clearAuth()">Out</button>'+pb;
+  }else bar.innerHTML='<button class="btn-outline btn-sm" onclick="handleAuth()" id="authBtn">🔗 Connect</button>'+pb;
+}
 function isDuplicate(e1,e2){if(e1.id===e2.id)return false;const n=e=>({date:e.date,startTime:e.startTime||'',category:(e.category||'').trim().toLowerCase(),opponent:(e.opponent||'').trim().toLowerCase().replace(/^vs\s+/i,'')});const a=n(e1),b=n(e2);return a.date===b.date&&a.startTime===b.startTime&&a.category===b.category&&a.opponent===b.opponent}
 function findCategoryInTitle(title){if(!title)return null;const clean=title.replace(/^PA\s+/i,'').replace(/^🚫🎵 NO SPOTIFY - /,'').replace(/^⭐ /,'').trim();for(const cat of state.adminSettings.categories){if(new RegExp('\\b'+escapeRegExp(cat)+'\\b','i').test(clean))return cat}return null}
 function isPAEvent(ev){if(!ev||!ev.summary)return false;const title=ev.summary.trim();if(title.startsWith('PA ')||title.startsWith('pa '))return true;if(title.startsWith('⭐')||title.startsWith('🚫🎵 NO SPOTIFY'))return true;return findCategoryInTitle(title)!==null}
@@ -110,28 +222,312 @@ async function updateConflictState(){const eventsByDate={};for(const ev of state
 function updateConflictUI(){const badge=document.getElementById('conflictBadge');if(!badge)return;const active=state.events.filter(ev=>ev.hasConflict&&ev.status!=='declined'&&!ev._conflictCleared);const count=active.length;if(count>0){badge.textContent=count;badge.style.display='block'}else{badge.style.display='none'}}
 function dismissConflict(eventId){const ev=state.events.find(e=>e.id===eventId);if(ev){ev._conflictCleared=true;saveState();updateConflictUI();renderAll();toast('Conflict dismissed','success')}}
 
-function addEvent(d,skipSync){const ev={id:gid(),date:d.date,startTime:d.startTime||'',endDate:d.endDate||'',category:d.category,opponent:d.opponent||'',location:d.location||'',notes:d.notes||'',noSpotify:d.noSpotify||false,paymentStatus:d.paymentStatus||state.adminSettings.defaultPayment,paymentAmount:d.paymentAmount||'',paymentPaid:false,status:'pending',calendarEventId:null,createdAt:new Date().toISOString(),_conflictCleared:false,_declinedFrom:null,hasConflict:false,conflictWith:[]};if(!skipSync&&state.events.some(e=>isDuplicate(e,ev)))toast('⚠️ Possible duplicate!','info');state.events.push(ev);if(d.category&&!state.adminSettings.categories.includes(d.category))state.adminSettings.categories.push(d.category);saveState();if(!skipSync){updateConflictState().then(()=>renderAll())}return ev}
-function updateEvent(id,upd){const idx=state.events.findIndex(e=>e.id===id);if(idx===-1)return;Object.assign(state.events[idx],upd);const ev=state.events[idx];if(upd.status==='declined'){if(ev.calendarEventId){deleteFromCal(ev);ev.calendarEventId=null}}else if(upd.status==='confirmed'||upd.status==='pending'){if(isOnline){if(!ev.calendarEventId)pushToCal(ev);else updateCalEvent(ev)}else{toast('Offline – will sync later','info');offlineQueue.push(()=>{if(!ev.calendarEventId)pushToCal(ev);else updateCalEvent(ev)})}}saveState();updateConflictState().then(()=>renderAll())}
-function deleteEvent(id){const ev=state.events.find(e=>e.id===id);if(ev?.calendarEventId)deleteFromCal(ev);state.events=state.events.filter(e=>e.id!==id);saveState();updateConflictState().then(()=>renderAll());toast('Deleted','info')}
-async function confirmEvent(id){const ev=state.events.find(e=>e.id===id);if(!ev)return;const overlaps=state.events.filter(e=>e.id!==id&&e.status==='confirmed'&&evConflict(ev,e));if(overlaps.length&&!confirm('⚠️ Overlaps with confirmed:\n'+overlaps.map(e=>getTitle(e)).join(', ')+'\n\nConfirm anyway?'))return;if(!ev.calendarEventId&&isOnline){try{await pushToCal(ev)}catch(e){toast('Failed to push to Google Calendar.','error');return}}if(!ev.calendarEventId){toast('Cannot confirm while offline.','error');return}updateEvent(id,{status:'confirmed'});toast('Confirmed! ✅','success')}
-function declineEvent(id){const ev=state.events.find(e=>e.id===id);if(!ev)return;if(ev.calendarEventId)deleteFromCal(ev);updateEvent(id,{status:'declined',calendarEventId:null});toast('Declined ❌','info')}
+function addEvent(d,skipSync){
+  const ev={id:gid(),date:d.date,startTime:d.startTime||'',endDate:d.endDate||'',category:d.category,opponent:d.opponent||'',location:d.location||'',notes:d.notes||'',noSpotify:d.noSpotify||false,paymentStatus:d.paymentStatus||state.adminSettings.defaultPayment,paymentAmount:d.paymentAmount||'',paymentPaid:false,status:'pending',calendarEventId:null,createdAt:new Date().toISOString(),_conflictCleared:false,_declinedFrom:null,hasConflict:false,conflictWith:[],_pushRetries:0};
+  if(!skipSync&&state.events.some(e=>isDuplicate(e,ev)))toast('⚠️ Possible duplicate!','info');
+  state.events.push(ev);
+  if(d.category&&!state.adminSettings.categories.includes(d.category))state.adminSettings.categories.push(d.category);
+  saveState();
+  if(!skipSync){updateConflictState().then(()=>renderAll())}
+  return ev;
+}
+function updateEvent(id,upd){
+  const idx=state.events.findIndex(e=>e.id===id);
+  if(idx===-1)return;
+  Object.assign(state.events[idx],upd);
+  const ev=state.events[idx];
+  if(upd.status==='declined'){
+    if(ev.calendarEventId){deleteFromCal(ev);ev.calendarEventId=null}
+  }else if(upd.status==='confirmed'||upd.status==='pending'){
+    if(isOnline){
+      if(!ev.calendarEventId)pushToCal(ev);
+      else updateCalEvent(ev);
+    }else{
+      toast('Offline – will sync later','info');
+      offlineQueue.push(()=>{if(!ev.calendarEventId)pushToCal(ev);else updateCalEvent(ev)});
+    }
+  }
+  saveState();updateConflictState().then(()=>renderAll());
+}
+function deleteEvent(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(ev?.calendarEventId)deleteFromCal(ev);
+  state.events=state.events.filter(e=>e.id!==id);
+  saveState();updateConflictState().then(()=>renderAll());toast('Deleted','info');
+}
+async function confirmEvent(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(!ev)return;
+  const overlaps=state.events.filter(e=>e.id!==id&&e.status==='confirmed'&&evConflict(ev,e));
+  if(overlaps.length&&!confirm('⚠️ Overlaps with confirmed:\n'+overlaps.map(e=>getTitle(e)).join(', ')+'\n\nConfirm anyway?'))return;
+  if(!ev.calendarEventId&&isOnline){
+    try{await pushToCal(ev)}catch(e){toast('Failed to push to Google Calendar.','error');return}
+  }
+  if(!ev.calendarEventId){toast('Cannot confirm while offline.','error');return}
+  updateEvent(id,{status:'confirmed'});
+  toast('Confirmed! ✅','success');
+}
+function declineEvent(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(!ev)return;
+  if(ev.calendarEventId)deleteFromCal(ev);
+  updateEvent(id,{status:'declined',calendarEventId:null});
+  toast('Declined ❌','info');
+}
 function restoreEvent(id){updateEvent(id,{status:'pending'});toast('Restored','info')}
-function resolveConflict(keepId,declineId){const keep=state.events.find(e=>e.id===keepId),dec=state.events.find(e=>e.id===declineId);if(!keep||!dec)return;updateEvent(keepId,{status:'confirmed',_declinedFrom:declineId});updateEvent(declineId,{status:'declined'});keep.notes=keep.notes?keep.notes+'\n⚠️ Declined: "'+getTitle(dec)+'" on '+getDateRange(dec):'⚠️ Declined: "'+getTitle(dec)+'" on '+getDateRange(dec);updateCalEvent(keep);saveState();toast('Kept "'+getTitle(keep)+'", declined "'+getTitle(dec)+'"','success');updateConflictState().then(()=>renderAll())}
+function resolveConflict(keepId,declineId){
+  const keep=state.events.find(e=>e.id===keepId),dec=state.events.find(e=>e.id===declineId);
+  if(!keep||!dec)return;
+  updateEvent(keepId,{status:'confirmed',_declinedFrom:declineId});
+  updateEvent(declineId,{status:'declined'});
+  keep.notes=keep.notes?keep.notes+'\n⚠️ Declined: "'+getTitle(dec)+'" on '+getDateRange(dec):'⚠️ Declined: "'+getTitle(dec)+'" on '+getDateRange(dec);
+  updateCalEvent(keep);
+  saveState();
+  toast('Kept "'+getTitle(keep)+'", declined "'+getTitle(dec)+'"','success');
+  updateConflictState().then(()=>renderAll());
+}
 function undoResolution(keepId,declineId){updateEvent(keepId,{status:'pending',_declinedFrom:null});updateEvent(declineId,{status:'pending'});toast('Resolution undone','info')}
-async function keepBothEvents(id1,id2){const e1=state.events.find(e=>e.id===id1),e2=state.events.find(e=>e.id===id2);if(!e1||!e2){toast('Event not found','error');return}if(e1.status==='pending')e1.status='confirmed';if(e2.status==='pending')e2.status='confirmed';e1._conflictCleared=true;e2._conflictCleared=true;e1.hasConflict=false;e2.hasConflict=false;saveState();await updateConflictState();renderAll();toast('✅ Both events confirmed and conflict cleared!','success');if(isOnline){setTimeout(async()=>{if(!e1.calendarEventId)await pushToCal(e1);await new Promise(r=>setTimeout(r,500));if(!e2.calendarEventId)await pushToCal(e2)},1000)}else{toast('Offline – will sync when reconnected.','info');offlineQueue.push(()=>{if(!e1.calendarEventId)pushToCal(e1);if(!e2.calendarEventId)pushToCal(e2)})}}
-async function confirmAll(){const pending=state.events.filter(e=>e.status==='pending');if(!pending.length){toast('No pending events','info');return}const conflicts=[],seen=new Set();for(const e1 of pending)for(const e2 of pending){if(e1.id>=e2.id)continue;if(evConflict(e1,e2)&&!seen.has(e1.id+'-'+e2.id)){conflicts.push([e1,e2]);seen.add(e1.id+'-'+e2.id)}}if(conflicts.length){let msg='⚠️ Some pending events conflict:\n\n';conflicts.forEach(([a,b])=>{msg+='• '+getTitle(a)+' vs '+getTitle(b)+'\n   '+getDateRange(a)+' '+fmtTime(a)+'\n\n'});msg+='Resolve these conflicts first.';alert(msg);switchTab('conflicts');return}let count=0;for(const e of pending){if(!e.calendarEventId)await pushToCal(e);updateEvent(e.id,{status:'confirmed'});count++}saveState();updateConflictState().then(()=>renderAll());toast('Confirmed '+count+' events ✅','success')}
-function markPaid(id){const ev=state.events.find(e=>e.id===id);if(!ev)return;ev.paymentPaid=true;ev.paymentStatus='Paid ✅';if(ev.calendarEventId)updateCalEvent(ev);saveState();renderAll();toast('Paid! 💰','success')}
-function unmarkPaid(id){const ev=state.events.find(e=>e.id===id);if(!ev)return;ev.paymentPaid=false;ev.paymentStatus='Paid Later';if(ev.calendarEventId)updateCalEvent(ev);saveState();renderAll();toast('Unpaid','info')}
-async function toggleSpotifyFromCard(id){const ev=state.events.find(e=>e.id===id);if(!ev)return;ev.noSpotify=!ev.noSpotify;toast(ev.noSpotify?'🚫 Spotify BLOCKED':'🎵 Spotify allowed','info');if(isOnline&&ev.calendarEventId){try{await updateCalEvent(ev)}catch(e){toast('Sync failed','error')}}else if(isOnline&&!ev.calendarEventId&&ev.status!=='declined'){try{await pushToCal(ev)}catch(e){toast('Sync failed','error')}}else if(!isOnline){offlineQueue.push(()=>{if(ev.calendarEventId)updateCalEvent(ev);else if(ev.status!=='declined')pushToCal(ev)})}saveState();renderAll()}
+async function keepBothEvents(id1,id2){
+  const e1=state.events.find(e=>e.id===id1),e2=state.events.find(e=>e.id===id2);
+  if(!e1||!e2){toast('Event not found','error');return}
+  if(e1.status==='pending')e1.status='confirmed';
+  if(e2.status==='pending')e2.status='confirmed';
+  e1._conflictCleared=true;e2._conflictCleared=true;
+  e1.hasConflict=false;e2.hasConflict=false;
+  saveState();await updateConflictState();renderAll();
+  toast('✅ Both events confirmed and conflict cleared!','success');
+  if(isOnline){
+    setTimeout(async()=>{
+      if(!e1.calendarEventId)await pushToCal(e1);
+      await new Promise(r=>setTimeout(r,500));
+      if(!e2.calendarEventId)await pushToCal(e2);
+    },1000)
+  }else{
+    toast('Offline – will sync when reconnected.','info');
+    offlineQueue.push(()=>{if(!e1.calendarEventId)pushToCal(e1);if(!e2.calendarEventId)pushToCal(e2)});
+  }
+}
+async function confirmAll(){
+  const pending=state.events.filter(e=>e.status==='pending');
+  if(!pending.length){toast('No pending events','info');return}
+  const conflicts=[],seen=new Set();
+  for(const e1 of pending)for(const e2 of pending){
+    if(e1.id>=e2.id)continue;
+    if(evConflict(e1,e2)&&!seen.has(e1.id+'-'+e2.id)){conflicts.push([e1,e2]);seen.add(e1.id+'-'+e2.id)}
+  }
+  if(conflicts.length){
+    let msg='⚠️ Some pending events conflict:\n\n';
+    conflicts.forEach(([a,b])=>{msg+='• '+getTitle(a)+' vs '+getTitle(b)+'\n   '+getDateRange(a)+' '+fmtTime(a)+'\n\n'});
+    msg+='Resolve these conflicts first.';alert(msg);switchTab('conflicts');return;
+  }
+  let count=0;
+  for(const e of pending){
+    if(!e.calendarEventId)await pushToCal(e);
+    updateEvent(e.id,{status:'confirmed'});count++;
+  }
+  saveState();updateConflictState().then(()=>renderAll());toast('Confirmed '+count+' events ✅','success');
+}
+function markPaid(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(!ev)return;ev.paymentPaid=true;ev.paymentStatus='Paid ✅';
+  if(ev.calendarEventId)updateCalEvent(ev);
+  saveState();renderAll();toast('Paid! 💰','success');
+}
+function unmarkPaid(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(!ev)return;ev.paymentPaid=false;ev.paymentStatus='Paid Later';
+  if(ev.calendarEventId)updateCalEvent(ev);
+  saveState();renderAll();toast('Unpaid','info');
+}
+async function toggleSpotifyFromCard(id){
+  const ev=state.events.find(e=>e.id===id);
+  if(!ev)return;
+  ev.noSpotify=!ev.noSpotify;
+  toast(ev.noSpotify?'🚫 Spotify BLOCKED':'🎵 Spotify allowed','info');
+  if(isOnline&&ev.calendarEventId){
+    try{await updateCalEvent(ev)}catch(e){toast('Sync failed','error')}
+  }else if(isOnline&&!ev.calendarEventId&&ev.status!=='declined'){
+    try{await pushToCal(ev)}catch(e){toast('Sync failed','error')}
+  }else if(!isOnline){
+    offlineQueue.push(()=>{if(ev.calendarEventId)updateCalEvent(ev);else if(ev.status!=='declined')pushToCal(ev)});
+  }
+  saveState();renderAll();
+}
 
-async function pushToCal(ev){if(!state.accessToken){toast('Connect Google first!','error');return}if(ev.calendarEventId||ev.status==='declined')return;if(!isValidDateStr(ev.date)){toast('⚠️ "'+getTitle(ev)+'" has no valid date','error');return}if(ev.endDate&&!isValidDateStr(ev.endDate)){ev.endDate=''}setInFlight(ev.id,true);try{await enqueueCalendarTask(async()=>{const title=getTitle(ev),ds=ev.date,ts=to24hour(ev.startTime);let sd,ed;const allDay=!ts;if(!allDay){sd=new Date(ds+'T'+ts+':00');ed=new Date(sd.getTime()+CONFIG.EVENT_DURATION_MINUTES*60000)}else{sd=new Date(ds+'T00:00:00');const rawEnd=ev.endDate||ds;const endDateObj=new Date(rawEnd+'T00:00:00');endDateObj.setDate(endDateObj.getDate()+1);ed=endDateObj}let desc='';if(ev.noSpotify)desc+='🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n';if(ev.paymentAmount)desc+='\n💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n';if(ev.notes)desc+='\n📝 '+ev.notes+'\n';const body={summary:(ev.noSpotify?'🚫🎵 NO SPOTIFY - ':'')+title,description:desc,start:allDay?{date:ds}:{dateTime:sd.toISOString(),timeZone:CONFIG.TIMEZONE},end:allDay?{date:ed.toISOString().split('T')[0]}:{dateTime:ed.toISOString(),timeZone:CONFIG.TIMEZONE},attendees:[{email:CONFIG.YOUR_EMAIL},{email:CONFIG.GINGER_EMAIL},{email:CONFIG.WORK_EMAIL}],reminders:{useDefault:false,overrides:[{method:'popup',minutes:60},{method:'popup',minutes:1440},{method:'popup',minutes:morningReminderMinutes(ev)},...(ev.noSpotify?[{method:'popup',minutes:10}]:[])]},extendedProperties:{private:{appStatus:ev.status,paymentStatus:ev.paymentStatus,paymentAmount:ev.paymentAmount||'',paymentPaid:String(ev.paymentPaid),noSpotify:String(ev.noSpotify),opponent:ev.opponent||'',location:ev.location||'',notes:ev.notes||'',category:ev.category}}};const data=await apiCall('/calendar/v3/calendars/primary/events?sendUpdates=none',{method:'POST',body:JSON.stringify(body)});ev.calendarEventId=data.id;saveState()})}catch(e){toast('Calendar push failed: '+e.message,'error');ev.status='pending';saveState();offlineQueue.push(()=>pushToCal(ev))}finally{setInFlight(ev.id,false)}}
+// ---------- FIXED: retry only on transient errors, stop after 3 ----------
+async function pushToCal(ev){
+  if(!state.accessToken){toast('Connect Google first!','error');return}
+  if(ev.calendarEventId||ev.status==='declined')return;
+  if(!isValidDateStr(ev.date)){toast('⚠️ "'+getTitle(ev)+'" has no valid date','error');return}
+  if(ev.endDate&&!isValidDateStr(ev.endDate)){ev.endDate=''}
+  setInFlight(ev.id,true);
+  try{
+    await enqueueCalendarTask(async()=>{
+      const title=getTitle(ev),ds=ev.date,ts=to24hour(ev.startTime);
+      let sd,ed;
+      const allDay=!ts;
+      if(!allDay){
+        sd=new Date(ds+'T'+ts+':00');
+        ed=new Date(sd.getTime()+CONFIG.EVENT_DURATION_MINUTES*60000);
+      }else{
+        sd=new Date(ds+'T00:00:00');
+        const rawEnd=ev.endDate||ds;
+        const endDateObj=new Date(rawEnd+'T00:00:00');
+        endDateObj.setDate(endDateObj.getDate()+1);ed=endDateObj;
+      }
+      let desc='';
+      if(ev.noSpotify)desc+='🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n';
+      if(ev.paymentAmount)desc+='\n💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n';
+      if(ev.notes)desc+='\n📝 '+ev.notes+'\n';
+      const body={
+        summary:(ev.noSpotify?'🚫🎵 NO SPOTIFY - ':'')+title,
+        description:desc,
+        start:allDay?{date:ds}:{dateTime:sd.toISOString(),timeZone:CONFIG.TIMEZONE},
+        end:allDay?{date:ed.toISOString().split('T')[0]}:{dateTime:ed.toISOString(),timeZone:CONFIG.TIMEZONE},
+        attendees:[{email:CONFIG.YOUR_EMAIL},{email:CONFIG.GINGER_EMAIL},{email:CONFIG.WORK_EMAIL}],
+        reminders:{useDefault:false,overrides:[
+          {method:'popup',minutes:60},{method:'popup',minutes:1440},
+          {method:'popup',minutes:morningReminderMinutes(ev)},
+          ...(ev.noSpotify?[{method:'popup',minutes:10}]:[])
+        ]},
+        extendedProperties:{private:{appStatus:ev.status,paymentStatus:ev.paymentStatus,paymentAmount:ev.paymentAmount||'',paymentPaid:String(ev.paymentPaid),noSpotify:String(ev.noSpotify),opponent:ev.opponent||'',location:ev.location||'',notes:ev.notes||'',category:ev.category}}
+      };
+      const data=await apiCall('/calendar/v3/calendars/primary/events?sendUpdates=none',{method:'POST',body:JSON.stringify(body)});
+      ev.calendarEventId=data.id;
+      saveState();
+    });
+  }catch(e){
+    toast('Calendar push failed: '+e.message,'error');
+    ev.status='pending';
+    saveState();
+    // Only retry if it's a transient error and we haven't exceeded 3 attempts
+    const retryCount = ev._pushRetries || 0;
+    if(e.retryable && retryCount < 3){
+      ev._pushRetries = retryCount + 1;
+      offlineQueue.push(()=>pushToCal(ev));
+    } else {
+      console.warn('Permanent failure or max retries for event, not retrying:', ev, e);
+    }
+  } finally {
+    setInFlight(ev.id,false);
+  }
+}
 
-async function deleteFromCal(ev){if(!state.accessToken||!ev.calendarEventId)return;setInFlight(ev.id,true);try{await enqueueCalendarTask(()=>apiCall('/calendar/v3/calendars/primary/events/'+ev.calendarEventId+'?sendUpdates=none',{method:'DELETE'}));ev.calendarEventId=null}catch(e){console.error('Delete failed:',e)}finally{setInFlight(ev.id,false)}}
-async function updateCalEvent(ev){if(!state.accessToken||!ev.calendarEventId)return;if(ev.status==='declined'){await deleteFromCal(ev);return}if(!isValidDateStr(ev.date)){toast('⚠️ "'+getTitle(ev)+'" has no valid date','error');return}setInFlight(ev.id,true);try{await enqueueCalendarTask(async()=>{const title=getTitle(ev),ds=ev.date,ts=to24hour(ev.startTime),allDay=!ts;let sd,ed;if(!allDay){sd=new Date(ds+'T'+ts+':00');ed=new Date(sd.getTime()+CONFIG.EVENT_DURATION_MINUTES*60000)}else{sd=new Date(ds+'T00:00:00');const rawEnd=ev.endDate||ds;const endDateObj=new Date(rawEnd+'T00:00:00');endDateObj.setDate(endDateObj.getDate()+1);ed=endDateObj}const body={summary:(ev.noSpotify?'🚫🎵 NO SPOTIFY - ':'')+title,description:(ev.noSpotify?'🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n':'')+(ev.paymentAmount?'\n💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n':'')+(ev.notes?'\n📝 '+ev.notes+'\n':''),start:allDay?{date:ds}:{dateTime:sd.toISOString(),timeZone:CONFIG.TIMEZONE},end:allDay?{date:ed.toISOString().split('T')[0]}:{dateTime:ed.toISOString(),timeZone:CONFIG.TIMEZONE},extendedProperties:{private:{appStatus:ev.status,paymentStatus:ev.paymentStatus,paymentAmount:ev.paymentAmount||'',paymentPaid:String(ev.paymentPaid),noSpotify:String(ev.noSpotify),opponent:ev.opponent||'',location:ev.location||'',notes:ev.notes||'',category:ev.category}}};await apiCall('/calendar/v3/calendars/primary/events/'+ev.calendarEventId+'?sendUpdates=none',{method:'PATCH',body:JSON.stringify(body)})})}catch(e){console.error('Update failed:',e)}finally{setInFlight(ev.id,false)}}
+async function deleteFromCal(ev){
+  if(!state.accessToken||!ev.calendarEventId)return;
+  setInFlight(ev.id,true);
+  try{await enqueueCalendarTask(()=>apiCall('/calendar/v3/calendars/primary/events/'+ev.calendarEventId+'?sendUpdates=none',{method:'DELETE'}));ev.calendarEventId=null}
+  catch(e){console.error('Delete failed:',e)}
+  finally{setInFlight(ev.id,false)}
+}
+async function updateCalEvent(ev){
+  if(!state.accessToken||!ev.calendarEventId)return;
+  if(ev.status==='declined'){await deleteFromCal(ev);return}
+  if(!isValidDateStr(ev.date)){toast('⚠️ "'+getTitle(ev)+'" has no valid date','error');return}
+  setInFlight(ev.id,true);
+  try{
+    await enqueueCalendarTask(async()=>{
+      const title=getTitle(ev),ds=ev.date,ts=to24hour(ev.startTime),allDay=!ts;
+      let sd,ed;
+      if(!allDay){
+        sd=new Date(ds+'T'+ts+':00');
+        ed=new Date(sd.getTime()+CONFIG.EVENT_DURATION_MINUTES*60000);
+      }else{
+        sd=new Date(ds+'T00:00:00');
+        const rawEnd=ev.endDate||ds;
+        const endDateObj=new Date(rawEnd+'T00:00:00');
+        endDateObj.setDate(endDateObj.getDate()+1);ed=endDateObj;
+      }
+      const body={
+        summary:(ev.noSpotify?'🚫🎵 NO SPOTIFY - ':'')+title,
+        description:(ev.noSpotify?'🚫🎵🚫 SPOTIFY BLOCKED 🚫🎵🚫\n\n⚠️ GINGER - DO NOT USE SPOTIFY OR GOOGLE HOME DURING THIS EVENT ⚠️\n\n':'')
+          +(ev.paymentAmount?'\n💰 Payment: $'+ev.paymentAmount+' ('+ev.paymentStatus+')\n':'')
+          +(ev.notes?'\n📝 '+ev.notes+'\n':''),
+        start:allDay?{date:ds}:{dateTime:sd.toISOString(),timeZone:CONFIG.TIMEZONE},
+        end:allDay?{date:ed.toISOString().split('T')[0]}:{dateTime:ed.toISOString(),timeZone:CONFIG.TIMEZONE},
+        extendedProperties:{private:{appStatus:ev.status,paymentStatus:ev.paymentStatus,paymentAmount:ev.paymentAmount||'',paymentPaid:String(ev.paymentPaid),noSpotify:String(ev.noSpotify),opponent:ev.opponent||'',location:ev.location||'',notes:ev.notes||'',category:ev.category}}
+      };
+      await apiCall('/calendar/v3/calendars/primary/events/'+ev.calendarEventId+'?sendUpdates=none',{method:'PATCH',body:JSON.stringify(body)});
+    });
+  }catch(e){console.error('Update failed:',e)}
+  finally{setInFlight(ev.id,false)}
+}
 
-async function syncWithCalendar(silent){if(!state.accessToken||state.syncInProgress)return;state.syncInProgress=true;if(!silent)toast('Syncing…','info');try{const now=new Date();const tMin=new Date(now.getFullYear()-2,0,1).toISOString(),tMax=new Date(now.getFullYear()+3,11,31).toISOString();let events=[],pt=null;do{let path='/calendar/v3/calendars/primary/events?timeMin='+encodeURIComponent(tMin)+'&timeMax='+encodeURIComponent(tMax)+'&maxResults=2500&singleEvents=true&orderBy=startTime';if(pt)path+='&pageToken='+pt;const d=await apiCall(path);if(d.items)events=events.concat(d.items.filter(isPAEvent));pt=d.nextPageToken}while(pt);const byId=new Map(),noId=[];for(const ev of state.events){if(ev.calendarEventId)byId.set(ev.calendarEventId,ev);else if(ev.status!=='declined')noId.push(ev)}const processed=new Set();for(const ce of events){if(!ce||ce.status==='cancelled')continue;processed.add(ce.id);const ex=byId.get(ce.id);const parsed=parseCalEventToLocal(ce);if(ex)Object.assign(ex,parsed,{id:ex.id});else{parsed.id=gid();state.events.push(parsed)}}const toRemove=[];for(const[cid,lev]of byId){if(!processed.has(cid))toRemove.push(lev.id)}if(toRemove.length){state.events=state.events.filter(e=>!toRemove.includes(e.id));if(!silent)toast('Removed '+toRemove.length+' event(s).','info')}for(let i=0;i<noId.length;i++){const lev=noId[i];try{await pushToCal(lev);if(!silent)toast('Synced: '+getTitle(lev),'success');await new Promise(r=>setTimeout(r,200))}catch(e){console.warn('Push failed',lev,e)}}for(let i=0;i<state.events.length;i++)for(let j=i+1;j<state.events.length;j++){if(isDuplicate(state.events[i],state.events[j])){state.events.splice(j,1);j--}}state.lastSyncTime=new Date().toISOString();saveState();await updateConflictState();renderAll();if(!silent)toast('Sync complete ✅','success')}catch(e){console.error('Sync failed:',e);if(!silent)toast('Sync error: '+e.message,'error')}finally{state.syncInProgress=false}}
+async function syncWithCalendar(silent){
+  if(!state.accessToken||state.syncInProgress)return;
+  state.syncInProgress=true;
+  if(!silent)toast('Syncing…','info');
+  try{
+    const now=new Date();
+    const tMin=new Date(now.getFullYear()-2,0,1).toISOString(),tMax=new Date(now.getFullYear()+3,11,31).toISOString();
+    let events=[],pt=null;
+    do{
+      let path='/calendar/v3/calendars/primary/events?timeMin='+encodeURIComponent(tMin)+'&timeMax='+encodeURIComponent(tMax)+'&maxResults=2500&singleEvents=true&orderBy=startTime';
+      if(pt)path+='&pageToken='+pt;
+      const d=await apiCall(path);
+      if(d.items)events=events.concat(d.items.filter(isPAEvent));
+      pt=d.nextPageToken;
+    }while(pt);
+    const byId=new Map(),noId=[];
+    for(const ev of state.events){
+      if(ev.calendarEventId)byId.set(ev.calendarEventId,ev);
+      else if(ev.status!=='declined')noId.push(ev);
+    }
+    const processed=new Set();
+    for(const ce of events){
+      if(!ce||ce.status==='cancelled')continue;
+      processed.add(ce.id);
+      const ex=byId.get(ce.id);
+      const parsed=parseCalEventToLocal(ce);
+      if(ex)Object.assign(ex,parsed,{id:ex.id});
+      else{parsed.id=gid();state.events.push(parsed)}
+    }
+    const toRemove=[];
+    for(const[cid,lev]of byId){if(!processed.has(cid))toRemove.push(lev.id)}
+    if(toRemove.length){state.events=state.events.filter(e=>!toRemove.includes(e.id));if(!silent)toast('Removed '+toRemove.length+' event(s).','info')}
+    for(let i=0;i<noId.length;i++){
+      const lev=noId[i];
+      try{await pushToCal(lev);if(!silent)toast('Synced: '+getTitle(lev),'success');await new Promise(r=>setTimeout(r,200))}
+      catch(e){console.warn('Push failed',lev,e)}
+    }
+    for(let i=0;i<state.events.length;i++)for(let j=i+1;j<state.events.length;j++){
+      if(isDuplicate(state.events[i],state.events[j])){state.events.splice(j,1);j--}
+    }
+    state.lastSyncTime=new Date().toISOString();
+    saveState();await updateConflictState();renderAll();
+    if(!silent)toast('Sync complete ✅','success');
+  }catch(e){
+    console.error('Sync failed:',e);
+    if(!silent)toast('Sync error: '+e.message,'error');
+  }finally{state.syncInProgress=false}
+}
 
-function parseCalEventToLocal(calEvent){const priv=calEvent.extendedProperties?.private||{};const title=calEvent.summary||'';const isAllDay=calEvent.start?.date&&!calEvent.start?.dateTime;const start=isAllDay?calEvent.start.date:calEvent.start?.dateTime;const end=calEvent.end?(calEvent.end.date||calEvent.end.dateTime):start;const dateObj=new Date(start);const dateStr=dateObj.toISOString().split('T')[0];const startTime=isAllDay?'':dateObj.toTimeString().slice(0,5);let endDate='';if(end&&end!==start){const eo=new Date(end);eo.setDate(eo.getDate()-1);endDate=eo.toISOString().split('T')[0]}const cleanTitle=title.replace(/^PA\s+/i,'').replace(/^🚫🎵 NO SPOTIFY - /,'').replace(/^⭐ /,'');let category=priv.category||'';if(!category){const f=findCategoryInTitle(cleanTitle);category=f||'Other'}let opponent=priv.opponent||'';if(!opponent){opponent=cleanTitle;const cr=new RegExp('\\b'+escapeRegExp(category)+'\\b','i');opponent=opponent.replace(cr,'').replace(/^[\s-]+|[\s-]+$/g,'').replace(/^vs\s+/i,'')}return{id:null,date:dateStr,startTime,endDate,category,opponent,location:priv.location||'',notes:priv.notes||'',noSpotify:priv.noSpotify==='true'||title.includes('NO SPOTIFY'),paymentStatus:priv.paymentStatus||'Paid Later',paymentAmount:priv.paymentAmount||'',paymentPaid:priv.paymentPaid==='true',status:priv.appStatus||'confirmed',calendarEventId:calEvent.id,createdAt:new Date().toISOString(),_conflictCleared:false,_declinedFrom:null,hasConflict:false,conflictWith:[]}}
+function parseCalEventToLocal(calEvent){
+  const priv=calEvent.extendedProperties?.private||{};
+  const title=calEvent.summary||'';
+  const isAllDay=calEvent.start?.date&&!calEvent.start?.dateTime;
+  const start=isAllDay?calEvent.start.date:calEvent.start?.dateTime;
+  const end=calEvent.end?(calEvent.end.date||calEvent.end.dateTime):start;
+  const dateObj=new Date(start);
+  const dateStr=dateObj.toISOString().split('T')[0];
+  const startTime=isAllDay?'':dateObj.toTimeString().slice(0,5);
+  let endDate='';
+  if(end&&end!==start){
+    const eo=new Date(end);
+    eo.setDate(eo.getDate()-1);
+    endDate=eo.toISOString().split('T')[0];
+  }
+  const cleanTitle=title.replace(/^PA\s+/i,'').replace(/^🚫🎵 NO SPOTIFY - /,'').replace(/^⭐ /,'');
+  let category=priv.category||'';
+  if(!category){const f=findCategoryInTitle(cleanTitle);category=f||'Other'}
+  let opponent=priv.opponent||'';
+  if(!opponent){
+    opponent=cleanTitle;
+    const cr=new RegExp('\\b'+escapeRegExp(category)+'\\b','i');
+    opponent=opponent.replace(cr,'').replace(/^[\s-]+|[\s-]+$/g,'').replace(/^vs\s+/i,'');
+  }
+  return{id:null,date:dateStr,startTime,endDate,category,opponent,location:priv.location||'',notes:priv.notes||'',noSpotify:priv.noSpotify==='true'||title.includes('NO SPOTIFY'),paymentStatus:priv.paymentStatus||'Paid Later',paymentAmount:priv.paymentAmount||'',paymentPaid:priv.paymentPaid==='true',status:priv.appStatus||'confirmed',calendarEventId:calEvent.id,createdAt:new Date().toISOString(),_conflictCleared:false,_declinedFrom:null,hasConflict:false,conflictWith:[],_pushRetries:0};
+}
 function morningReminderMinutes(ev){if(!ev.startTime)return 480;const[h,m]=ev.startTime.split(':').map(Number);const diff=(h*60+m)-(8*60);return diff<=0?60:diff}
 
 // Rendering
